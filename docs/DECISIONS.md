@@ -5,9 +5,9 @@ Format per entry: context, options, choice, reason, how to revisit. Status `acce
 ## M1: Repository home
 
 - **Context:** the server is a consumer of the generations; publishing it is the owner's decision.
-- **Choice:** local repository `~/repos/devos/devos-intelligence-mcp` (same conventions as the other `devos-*` repositories); no GitHub repository, no image release, no CI until the owner decides. The planned public name is `AlbertoMitroi/devos-intelligence-mcp`.
-- **Revisit:** when the owner publishes it (add CI like the engines: the test stage and `scripts/verify.sh`).
-- **Status:** accepted.
+- **Choice:** local repository `~/repos/devos/devos-intelligence-mcp` (same conventions as the other `devos-*` repositories), public on GitHub as `AlbertoMitroi/devos-intelligence-mcp` (MIT) since 2026-10-30 by the owner's decision. CI (`.github/workflows/ci.yml`) builds the test stage and the runtime image on amd64 and arm64 and runs the integration tests that need no local folders (anonymous ghcr.io pulls, contract drift); `scripts/verify.sh` stays the full local check. No image is published yet.
+- **Revisit:** when clients should pull a published image instead of building it.
+- **Status:** accepted (repository published 2026-10-30).
 
 ## M2: Runtime
 
