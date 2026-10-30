@@ -80,3 +80,11 @@ Format per entry: context, options, choice, reason, how to revisit. Status `acce
 - **Reason:** no extra configuration per repository; the generation is the verified source of what it covers; an agent always sees which repository a fact is in.
 - **Revisit:** when systems are published as OCI artifacts (then a registry source for them), or when a repository belongs to several systems (today the nearest wins, then the folder order).
 - **Status:** accepted.
+
+## M10: No gh token unless asked for
+
+- **Context:** the launcher fell back to `gh auth token` and handed it to the container on every start. The owner's `gh` token has `repo` and `workflow` scopes; a pull needs `read:packages` only, and the lab packages are public.
+- **Choice:** pulls are anonymous by default. When a registry refuses the anonymous token, the server tries `DEVOS_MCP_REGISTRY_TOKEN` (or `GHCR_TOKEN`), then the Docker credential store entry for that registry host only; `gh auth token` only with `DEVOS_MCP_GH_TOKEN=1`, in the server and in `scripts/mcp-docker.sh`.
+- **Reason:** never move a broad credential into a process that does not need it.
+- **Revisit:** if GitHub offers a package-scoped token from `gh`.
+- **Status:** accepted (requested by the coordinator for the owner, 2026-10-30).

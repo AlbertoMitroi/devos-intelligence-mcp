@@ -34,9 +34,11 @@ test('credentials: environment first, then Docker auths, helpers, credsStore, th
   assert.equal(fromDockerConfig('ghcr.io', fakes(null)), null);
   assert.equal(fromDockerConfig('ghcr.io', fakes({ credsStore: 'missing' })), null);
 
-  assert.deepEqual(fromGh('ghcr.io', store), { user: 'token', secret: 'from-gh', source: 'gh' });
-  assert.equal(fromGh('registry.example.com', store), null, 'gh tokens are only offered to ghcr.io');
+  assert.equal(fromGh('ghcr.io', store), null, 'gh is opt-in: its token has broader scopes than a pull needs');
+  const optIn = { ...store, DEVOS_MCP_GH_TOKEN: '1' };
+  assert.deepEqual(fromGh('ghcr.io', optIn), { user: 'token', secret: 'from-gh', source: 'gh' });
+  assert.equal(fromGh('registry.example.com', optIn), null, 'gh tokens are only offered to ghcr.io');
 
-  const order = credentialCandidates('ghcr.io', { ...store, GHCR_TOKEN: 'e' }).map((f) => f()?.source);
+  const order = credentialCandidates('ghcr.io', { ...optIn, GHCR_TOKEN: 'e' }).map((f) => f()?.source);
   assert.deepEqual(order, ['env', 'docker-credential-fake', 'gh']);
 });

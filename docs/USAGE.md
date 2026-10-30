@@ -68,6 +68,7 @@ All optional; the defaults work on the owner's machine.
 | `DEVOS_MCP_OCI` | `on` | `off` disables the registry (cache and local folders still work) |
 | `DEVOS_MCP_OCI_REFERENCE` | `ghcr.io/{owner}/context-{repo}` | repository of the artifacts; `{owner}` and `{repo}` come from the `origin` remote; an `http://` prefix means a plain-HTTP registry |
 | `DEVOS_MCP_REGISTRY_USER`, `DEVOS_MCP_REGISTRY_TOKEN` (or `GHCR_TOKEN`) | see below | credentials for private packages (a token with `read:packages`); never printed |
+| `DEVOS_MCP_GH_TOKEN` | `0` | `1` allows `gh auth token` as the last credential source for ghcr.io |
 | `DEVOS_MCP_IMAGE` | `devos-intelligence-mcp:local` | image the launcher runs |
 | `DEVOS_MCP_DOCKER_NETWORK` | Docker default | network for the launcher's container |
 
@@ -77,9 +78,9 @@ The `context-*` packages start private. The server first asks for an anonymous t
 
 1. `DEVOS_MCP_REGISTRY_TOKEN` (or `GHCR_TOKEN`), with `DEVOS_MCP_REGISTRY_USER` (default `token`);
 2. the Docker configuration (`$DOCKER_CONFIG/config.json` or `~/.docker/config.json`): inline `auths`, `credHelpers` for the host, then `credsStore`, through `docker-credential-<helper> get` (what `docker login ghcr.io` stores);
-3. `gh auth token`, for `ghcr.io` only. The `gh` token needs the `read:packages` scope (`gh auth refresh -s read:packages`).
+3. `gh auth token`, for `ghcr.io` only, and only with `DEVOS_MCP_GH_TOKEN=1`: a `gh` token usually carries `repo` and `workflow` scopes, far more than a pull needs, so it is never used unless asked for (it also needs `read:packages`: `gh auth refresh -s read:packages`).
 
-`generation_info` names the source that worked (`credentials from env`, `docker-credential-desktop`, `gh`), never the value. In Docker the container has no credential store, so `scripts/mcp-docker.sh` does steps 2 and 3 on the host when no token is set and passes the result by variable name only. Once a package is public, nothing is needed.
+`generation_info` names the source that worked (`credentials from env`, `docker-credential-desktop`, `gh`), never the value. In Docker the container has no credential store, so `scripts/mcp-docker.sh` does step 2 (the `ghcr.io` entry only) and, with `DEVOS_MCP_GH_TOKEN=1`, step 3 on the host when no token is set, and passes the result by variable name only. The lab packages are public: nothing is needed, and pulls are anonymous.
 
 ## Command line
 

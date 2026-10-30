@@ -16,8 +16,10 @@ fi
 cache="${DEVOS_MCP_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/devos-intelligence-mcp}"
 mkdir -p "$cache"
 
-# Private context-* packages: the container has no credential store, so look the GHCR token up here (Docker
-# credential helper, then gh) when none is set, and hand it over by variable name only (never on a command line).
+# Private context-* packages: the container has no credential store, so when no token is set, look up the ghcr.io
+# entry of the Docker credential store here (what `docker login ghcr.io` saved) and hand it over by variable name only
+# (never on a command line). `gh auth token` is used only with DEVOS_MCP_GH_TOKEN=1: a gh token usually carries repo and
+# workflow scopes, far more than the read:packages a pull needs (decision M10). The server still tries anonymously first.
 # Skipped when DEVOS_MCP_OCI=off or the reference is not on ghcr.io.
 registry_host() { printf '%s' "${DEVOS_MCP_OCI_REFERENCE:-ghcr.io/x}" | sed -e 's#^[a-z]*://##' -e 's#/.*##'; }
 if [ "${DEVOS_MCP_OCI:-on}" != off ] && [ -z "${DEVOS_MCP_REGISTRY_TOKEN:-}${GHCR_TOKEN:-}" ] && [ "$(registry_host)" = ghcr.io ]; then
@@ -36,7 +38,7 @@ if [ "${DEVOS_MCP_OCI:-on}" != off ] && [ -z "${DEVOS_MCP_REGISTRY_TOKEN:-}${GHC
       export DEVOS_MCP_REGISTRY_TOKEN DEVOS_MCP_REGISTRY_USER
     fi
   fi
-  if [ -z "${DEVOS_MCP_REGISTRY_TOKEN:-}" ] && command -v gh > /dev/null 2>&1; then
+  if [ -z "${DEVOS_MCP_REGISTRY_TOKEN:-}" ] && [ "${DEVOS_MCP_GH_TOKEN:-0}" = 1 ] && command -v gh > /dev/null 2>&1; then
     DEVOS_MCP_REGISTRY_TOKEN="$(gh auth token --hostname github.com 2> /dev/null || true)"
     [ -n "$DEVOS_MCP_REGISTRY_TOKEN" ] && export DEVOS_MCP_REGISTRY_TOKEN || unset DEVOS_MCP_REGISTRY_TOKEN
   fi

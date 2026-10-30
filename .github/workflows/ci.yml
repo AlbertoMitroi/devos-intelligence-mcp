@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: devos-intelligence-mcp
+
+      # The public sibling repositories the integration tests read: the lab working copies (full history, so the
+      # published commits can be checked out) and the contract (vendored index.sql drift check).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AlbertoMitroi/devos-lab-web
+          path: devos-lab-web
+          fetch-depth: 0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AlbertoMitroi/devos-lab-leasing
+          path: devos-lab-leasing
+          fetch-depth: 0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AlbertoMitroi/devos-intelligence-contract
+          path: devos-intelligence-contract
+          fetch-depth: 0
+
+      - name: Test stage (type check, unit tests)
+        run: docker build --target test -t devos-intelligence-mcp:test devos-intelligence-mcp
+
+      - name: Runtime image and self-check
+        run: |
+          docker build --target runtime -t devos-intelligence-mcp:local devos-intelligence-mcp
+          docker run --rm --network none devos-intelligence-mcp:local --version
+          test "$(docker run --rm --network none devos-intelligence-mcp:local tools | wc -l | tr -d ' ')" = 14
+          test "$(docker run --rm --entrypoint id devos-intelligence-mcp:local -u)" != 0
+
+      - name: Integration (anonymous pulls from ghcr.io, contract drift)
+        # The local generation folders of the owner's machine are not in CI: the tests that need them skip, the
+        # real-registry tests and the drift check run.
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            -v "$PWD/devos-lab-web:/repos/devos-lab-web:ro" -v "$PWD/devos-lab-leasing:/repos/devos-lab-leasing:ro" \
+            -v "$PWD/devos-intelligence-contract:/repos/devos-intelligence-contract:ro" \
+            -e DEVOS_IT_LAB_WEB=/repos/devos-lab-web -e DEVOS_IT_LAB_LEASING=/repos/devos-lab-leasing \
+            -e DEVOS_IT_CONTRACT=/repos/devos-intelligence-contract -e DEVOS_IT_GHCR=1 \
+            --entrypoint node devos-intelligence-mcp:test --test --test-reporter=spec --test-concurrency=1 \
+            tests/integration/ghcr.test.ts tests/integration/generations.test.ts
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color .github/workflows/*.yml

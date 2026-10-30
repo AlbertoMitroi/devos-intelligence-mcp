@@ -1,7 +1,8 @@
-// Registry credentials (decision M6): the `context-*` packages start private, so a pull needs a token with
-// `read:packages`. Order: environment, Docker configuration (inline `auths`, then `credHelpers`, then `credsStore`
-// through `docker-credential-<helper> get`), then `gh auth token` for ghcr.io. Looked up only after an anonymous
-// attempt was refused; values are never logged or put in answers, only where they came from.
+// Registry credentials (decisions M6, M10): a private `context-*` package needs a token with `read:packages`. Order:
+// environment, Docker configuration (inline `auths`, then `credHelpers`, then `credsStore` through
+// `docker-credential-<helper> get`), each for the registry host only; `gh auth token` for ghcr.io only with
+// DEVOS_MCP_GH_TOKEN=1 (a gh token carries far broader scopes). Looked up only after an anonymous attempt was refused;
+// values are never logged or put in answers, only where they came from.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -49,7 +50,7 @@ export function fromDockerConfig(host: string, env: NodeJS.ProcessEnv): Credenti
 }
 
 export function fromGh(host: string, env: NodeJS.ProcessEnv): Credentials | null {
-  if (host !== 'ghcr.io') return null;
+  if (host !== 'ghcr.io' || env.DEVOS_MCP_GH_TOKEN !== '1') return null;
   try {
     const token = execFileSync('gh', ['auth', 'token', '--hostname', 'github.com'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env, timeout: 10000 }).trim();
     return token ? { user: 'token', secret: token, source: 'gh' } : null;
