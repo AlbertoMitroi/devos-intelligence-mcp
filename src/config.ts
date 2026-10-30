@@ -15,6 +15,8 @@ export interface Config {
     enabled: boolean;
     /** `ghcr.io/{owner}/context-{repo}`; an `http://` prefix means a plain-HTTP registry (tests). */
     reference: string;
+    /** Where system generations are published (decision M11): `ghcr.io/{owner}/context-systems`. */
+    systemsReference: string;
     maxBytes: number;
     timeoutMs: number;
   };
@@ -36,6 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     oci: {
       enabled: (env.DEVOS_MCP_OCI ?? 'on') !== 'off',
       reference: env.DEVOS_MCP_OCI_REFERENCE || 'ghcr.io/{owner}/context-{repo}',
+      systemsReference: env.DEVOS_MCP_OCI_SYSTEMS_REFERENCE || 'ghcr.io/{owner}/context-systems',
       maxBytes: int(env.DEVOS_MCP_OCI_MAX_BYTES, 1024 * 1024 * 1024),
       timeoutMs: int(env.DEVOS_MCP_OCI_TIMEOUT_MS, 30000),
     },

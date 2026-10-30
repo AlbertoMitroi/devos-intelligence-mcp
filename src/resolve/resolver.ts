@@ -2,7 +2,7 @@
 // local before cache before registry at equal distance, every generation verified before use.
 import { join } from 'node:path';
 import type { Config } from '../config.ts';
-import { candidates, changedSince, distanceTo, isAncestor, readWorkspace, type Workspace } from './git.ts';
+import { candidates, changedSince, distanceTo, isAncestor, normalizeRemote, readWorkspace, type Workspace } from './git.ts';
 import { FolderSource, readSystemInputs, type GenerationSource, type Hit, type SourceKind, type SystemInput } from './sources.ts';
 import { OciSource } from './oci.ts';
 import { verifyGeneration, type Manifest } from '../generation/verify.ts';
@@ -153,7 +153,15 @@ export class Resolver {
       const [loaded] = await this.materialize([h], res);
       if (!loaded) continue;
       const secondary = res.distance != null && distance > res.distance;
-      loaded.system = { name: h.system!.name, mine: h.system!.inputs, inputs: readSystemInputs(loaded.dir), commit: h.commit, distance, secondary };
+      // This repository's inputs come from the verified inputs.ndjson (an OCI hit knows only the tag before the pull).
+      const inputs = readSystemInputs(loaded.dir);
+      const repo = normalizeRemote(res.workspace.remoteUrl);
+      const mine = inputs.filter((i) => i.included && i.commit === h.commit && normalizeRemote(i.remoteUrl) === repo).map((i) => i.id);
+      if (mine.length === 0) {
+        res.skipped.push(`${h.origin}: its inputs do not include this repository at ${h.commit.slice(0, 12)}`);
+        continue;
+      }
+      loaded.system = { name: h.system!.name, mine, inputs, commit: h.commit, distance, secondary };
       if (secondary) res.loaded.push(loaded);
       else {
         res.commit = h.commit;

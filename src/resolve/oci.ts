@@ -12,6 +12,8 @@ import { CACHE_MARKER, type GenerationSource, type Hit, type SourceResult } from
 import { extractTo, readTar } from './tar.ts';
 import { credentialCandidates, type Credentials } from './credentials.ts';
 import { verifyGeneration } from '../generation/verify.ts';
+import { normalizeRemote } from './git.ts';
+import { readSystemInputs } from './sources.ts';
 
 export const ARTIFACT_TYPE = 'application/vnd.devos.intelligence.generation.v1';
 export const LAYER_TYPE = 'application/vnd.devos.intelligence.generation.v1.tar+gzip';
@@ -181,17 +183,25 @@ function cacheKey(display: string): string {
  * Pulls one artifact into `<cache>/generations/<reference>/<commit>/<layer>/`. Each layer is extracted to a temporary
  * folder, verified (generation checks, commit, manifest SHA-256 annotation) and renamed into place.
  */
-export async function pull(reg: Registry, display: string, tag: string, expectedCommit: string | null, cfg: Config): Promise<{ dir: string; label: string }[]> {
+/** For a system generation: its name, and the input (this repository at a commit) that its `inputs.ndjson` must hold. */
+export interface SystemPull {
+  name: string;
+  remoteUrl: string | null;
+  commit: string;
+}
+
+export async function pull(reg: Registry, display: string, tag: string, expectedCommit: string | null, cfg: Config, system?: SystemPull): Promise<{ dir: string; label: string }[]> {
   const { manifest, digest } = await reg.manifest(tag);
   const layers = manifest.layers.filter((l) => ACCEPTED_LAYERS.includes(l.mediaType) || /\.tar(\+gzip)?$/.test(l.mediaType));
   if (layers.length === 0) throw new Error(`${display}:${tag}: no generation layer (artifactType ${manifest.artifactType ?? 'none'})`);
-  const revision = manifest.annotations?.[ANNOTATION_REVISION] ?? null;
+  // A system's revision is the commit of its federation configuration, not of an input: not compared.
+  const revision = system ? null : manifest.annotations?.[ANNOTATION_REVISION] ?? null;
   if (expectedCommit && revision && revision !== expectedCommit) throw new Error(`${display}:${tag}: revision annotation ${revision} is not the requested ${expectedCommit}`);
   const commit = expectedCommit ?? revision;
   const out: { dir: string; label: string }[] = [];
   const errors: string[] = [];
   for (const [i, layer] of layers.entries()) {
-    const label = layerLabel(display, tag, manifest, layer, i, layers.length === 1);
+    const label = system ? `system:${system.name}` : layerLabel(display, tag, manifest, layer, i, layers.length === 1);
     try {
       const bytes = await reg.blob(layer, cfg.oci.maxBytes);
       const entries = readTar(bytes, cfg.oci.maxBytes);
@@ -206,11 +216,15 @@ export async function pull(reg: Registry, display: string, tag: string, expected
         const v = await verifyGeneration(root);
         if (!v.ok) throw new Error(`verification failed: ${v.errors.slice(0, 3).join('; ')}`);
         const actual = v.manifest!.commit;
-        if (commit && actual !== commit) throw new Error(`generation commit ${actual} is not the requested ${commit}`);
+        if (system) {
+          if (v.manifest!.generationType !== 'system') throw new Error('not a system generation');
+          const mine = normalizeRemote(system.remoteUrl);
+          if (!readSystemInputs(root).some((i) => i.included && i.commit === system.commit && normalizeRemote(i.remoteUrl) === mine)) throw new Error(`its inputs do not include this repository at ${system.commit.slice(0, 12)}`);
+        } else if (commit && actual !== commit) throw new Error(`generation commit ${actual} is not the requested ${commit}`);
         const want = layer.annotations?.[ANNOTATION_MANIFEST_SHA];
         if (want && want !== v.manifestSha256) throw new Error('manifest.json SHA-256 differs from the layer annotation');
         writeFileSync(join(root, CACHE_MARKER), JSON.stringify({ reference: `${display}:${tag}`, manifestDigest: digest, layerDigest: layer.digest, pulledAt: new Date().toISOString() }) + '\n');
-        const dest = join(cfg.cacheDir, 'generations', cacheKey(display), actual, label);
+        const dest = join(cfg.cacheDir, 'generations', cacheKey(display), actual.replace(/^system:/, 'system-'), label.replace(/^system:/, 'system-'));
         mkdirSync(join(dest, '..'), { recursive: true });
         if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
         renameSync(root, dest);
@@ -256,9 +270,42 @@ export class OciSource implements GenerationSource {
         if (!commit || !wanted.has(commit) || tagEngine(tag, commit) === null) continue;
         hits.push({ source: 'oci', commit, origin: `${r.display}:${tag}`, materialize: () => pull(r.reg, r.display, tag, commit, this.cfg) });
       }
-      return { hits, summary: `oci: ${r.display} (${r.reg.credentialSource ? `credentials from ${r.reg.credentialSource}` : 'anonymous'}), ${tags.length} tag(s), ${hits.length} within the candidate commits` };
+      const systems = await this.findSystems(ws, wanted);
+      const summary = `oci: ${r.display} (${r.reg.credentialSource ? `credentials from ${r.reg.credentialSource}` : 'anonymous'}), ${tags.length} tag(s), ${hits.length} within the candidate commits; ${systems.summary}`;
+      return { hits: [...hits, ...systems.hits], summary, error: systems.error };
     } catch (e) {
       const error = `oci: ${r.display}: ${(e as Error).message}`;
+      const systems = await this.findSystems(ws, new Set(commits));
+      return { hits: systems.hits, summary: `${error}; ${systems.summary}`, error: [error, systems.error].filter(Boolean).join('; ') };
+    }
+  }
+
+  /**
+   * System generations (decision M11): one tag listing of `ghcr.io/<owner>/context-systems`; input tags
+   * `<system>.<repo>.<commit>` name the systems that include this repository at a candidate commit.
+   */
+  async findSystems(ws: Workspace, wanted: Set<string>): Promise<{ hits: Hit[]; summary: string; error?: string }> {
+    if (this.cfg.system === 'off') return { hits: [], summary: 'systems: off' };
+    const ref = parseReference(this.cfg.oci.systemsReference, ws);
+    if (!ref || !ws.slug) return { hits: [], summary: 'systems: no owner in the remote URL' };
+    const reg = new Registry(ref.base, ref.name, { timeoutMs: this.cfg.oci.timeoutMs, credentials: credentialCandidates(new URL(ref.base).host, this.env) });
+    try {
+      const tags = await reg.tags();
+      const hits: Hit[] = [];
+      const repo = ws.slug.name.replace(/[^a-z0-9._-]/g, '');
+      for (const tag of tags) {
+        const m = /^([a-z0-9][a-z0-9_-]*)\.(.+)\.([0-9a-f]{40})$/.exec(tag);
+        if (!m || m[2] !== repo || !wanted.has(m[3])) continue;
+        const system: SystemPull = { name: m[1], remoteUrl: ws.remoteUrl, commit: m[3] };
+        // `inputs` is filled from the pulled generation's verified inputs.ndjson by the resolver.
+        hits.push({ source: 'oci', commit: m[3], origin: `${ref.display}:${tag}`, system: { name: m[1], inputs: [] }, materialize: () => pull(reg, ref.display, tag, null, this.cfg, system) });
+      }
+      return { hits, summary: `systems: ${ref.display}, ${tags.length} tag(s), ${hits.length} for this repository within the candidate commits` };
+    } catch (e) {
+      const message = (e as Error).message;
+      // GHCR answers 401 for a repository that does not exist as for a private one: not an error until one is published.
+      if (/HTTP (401|403|404)/.test(message)) return { hits: [], summary: `systems: ${ref.display} not published, or private without credentials (${message})` };
+      const error = `systems: ${ref.display}: ${message}`;
       return { hits: [], summary: error, error };
     }
   }

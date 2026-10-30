@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Resolver } from '../../src/resolve/resolver.ts';
 import { ARTIFACT_TYPE, LAYER_TYPE, type OciManifest } from '../../src/resolve/oci.ts';
-import { folderEntries, gitRepo, tarGz, testConfig, tmp, writeGeneration } from '../helpers.ts';
+import { folderEntries, gitRepo, tarGz, testConfig, tmp, writeGeneration, writeSystem } from '../helpers.ts';
 
 const sha = (b: Buffer | string) => `sha256:${createHash('sha256').update(b).digest('hex')}`;
 
@@ -203,6 +203,33 @@ test('OCI: a private package needs credentials; the source is named, the secret 
     assert.equal(ok.loaded.length, 1, [...ok.sources, ...ok.skipped, ...ok.errors].join('\n'));
     assert.match(ok.sources.join(), /credentials from env/);
     assert.doesNotMatch(JSON.stringify([ok.sources, ok.errors, ok.skipped, anon.errors, wrong.errors]), /s3cret|nope/);
+  } finally {
+    reg.server.close();
+  }
+});
+
+test('OCI: a system generation from context-systems through its input tag, verified against its inputs', async () => {
+  const reg = await fakeRegistry();
+  try {
+    const { dir, commits } = gitRepo(2, 'git@github.com:Example/Shop.git', 'system');
+    const sys = writeSystem(tmp(), 'shop', [{ id: 'web', remote: 'https://github.com/example/shop.git', commit: commits[0] }, { id: 'api', remote: 'https://github.com/example/api.git', commit: 'a'.repeat(40) }]);
+    const layer = tarGz(folderEntries(sys, ['manifest.json', 'inputs.ndjson', 'context/overview.md']));
+    reg.push('example/context-systems', `shop.shop.${commits[0]}`, layer, { 'dev.devos.intelligence.generation-type': 'system', 'dev.devos.intelligence.system': 'shop' });
+    // A tag that claims this repository at HEAD but whose generation does not hold that input is refused.
+    reg.push('example/context-systems', `liar.shop.${commits[1]}`, layer);
+    const cache = tmp();
+    const cfg = testConfig({ cacheDir: cache, oci: { enabled: true, reference: `${reg.url}/{owner}/context-{repo}`, systemsReference: `${reg.url}/{owner}/context-systems` } });
+    const res = await new Resolver(cfg).resolve(dir);
+    assert.ok(!('error' in res));
+    assert.deepEqual(res.loaded.map((g) => [g.label, g.source, g.system?.mine]), [['system:shop', 'oci', ['web']]], [...res.sources, ...res.skipped].join('\n'));
+    assert.equal(res.distance, 1);
+    assert.match(res.skipped.join('\n'), /liar.shop.[0-9a-f]{40}: .*its inputs do not include this repository/);
+    assert.match(res.sources.join('\n'), /systems: 127.0.0.1:\d+\/example\/context-systems, 2 tag\(s\), 2 for this repository/);
+
+    reg.server.close();
+    const offline = await new Resolver(cfg).resolve(dir);
+    assert.ok(!('error' in offline));
+    assert.deepEqual(offline.loaded.map((g) => [g.label, g.source]), [['system:shop', 'cache']]);
   } finally {
     reg.server.close();
   }

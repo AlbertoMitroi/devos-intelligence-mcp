@@ -67,6 +67,28 @@ docker run --rm --network "$net" -v "$work/layer:/work" -w /work "$oras_image" \
   --artifact-type application/vnd.devos.intelligence.generation.v1 --annotation-file annotations.json \
   generation.tar.gz:application/vnd.devos.intelligence.generation.v1.tar+gzip
 
+if [ -f "$generations/lab-system/manifest.json" ]; then
+  step "local registry with lab-system (context-systems layout, decision M11)"
+  mkdir -p "$work/system"
+  docker run --rm --user "$(id -u):$(id -g)" -v "$generations/lab-system:/g:ro" -v "$work/system:/w" --entrypoint sh "$tag:test" -c '
+    set -e
+    tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C /g -cf - . | gzip -n > /w/generation.tar.gz
+    node -e "
+      const fs = require(\"fs\");
+      const m = JSON.parse(fs.readFileSync(\"/g/manifest.json\", \"utf8\"));
+      const inputs = fs.readFileSync(\"/g/inputs.ndjson\", \"utf8\").split(\"\\n\").filter(Boolean).map((l) => JSON.parse(l)).filter((i) => i.included);
+      const repo = (u) => u.replace(/\\.git$/, \"\").split(\"/\").pop().toLowerCase();
+      const tags = [m.system + \"-\" + m.commit.slice(7), m.system + \"-main\", ...inputs.map((i) => m.system + \".\" + repo(i.repository.remoteUrl) + \".\" + i.commit)];
+      fs.writeFileSync(\"/w/tags\", tags.join(\",\"));
+      const sha = require(\"crypto\").createHash(\"sha256\").update(fs.readFileSync(\"/g/manifest.json\")).digest(\"hex\");
+      fs.writeFileSync(\"/w/annotations.json\", JSON.stringify({ \"\$manifest\": { \"org.opencontainers.image.source\": \"https://github.com/AlbertoMitroi/devos-lab\", \"dev.devos.intelligence.engine\": \"intelligence-federation\", \"dev.devos.intelligence.generation-type\": \"system\", \"dev.devos.intelligence.system\": m.system }, \"generation.tar.gz\": { \"dev.devos.intelligence.manifest-sha256\": sha } }));
+    "'
+  docker run --rm --network "$net" -v "$work/system:/work" -w /work "$oras_image" \
+    push --plain-http "registry:5000/albertomitroi/context-systems:$(cat "$work/system/tags")" \
+    --artifact-type application/vnd.devos.intelligence.generation.v1 --annotation-file annotations.json \
+    generation.tar.gz:application/vnd.devos.intelligence.generation.v1.tar+gzip
+fi
+
 step "integration tests (real generations, SDK client, registry)"
 docker run --rm --network "$net" --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$generations:/generations:ro" -v "$lab_web:/repos/devos-lab-web:ro" -v "$eshop:/repos/eshoponabp:ro" -v "$lab_leasing:/repos/devos-lab-leasing:ro" -v "$contract:/repos/devos-intelligence-contract:ro" -v "$work/out:/out" \

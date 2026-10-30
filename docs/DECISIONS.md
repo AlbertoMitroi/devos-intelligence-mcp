@@ -88,3 +88,11 @@ Format per entry: context, options, choice, reason, how to revisit. Status `acce
 - **Reason:** never move a broad credential into a process that does not need it.
 - **Revisit:** if GitHub offers a package-scoped token from `gh`.
 - **Status:** accepted (requested by the coordinator for the owner, 2026-10-30).
+
+## M11: System generations over OCI
+
+- **Context:** the federation publishes system generations from CI (question Q5). A working copy knows its repository and commit, not which systems include it, and GHCR has no catalog API to list `context-system-*` repositories.
+- **Choice (proposed here, accepted by the coordinator 2026-10-30):** one repository per owner, `ghcr.io/<owner>/context-systems`. Tags: `<system>-<64-hex system hash>` (immutable), `<system>-main` (moving), and one per included input, `<system>.<repo>.<40-hex input commit>`. Same artifact type and layer media type as a repository generation; manifest annotations `dev.devos.intelligence.generation-type: system` and `dev.devos.intelligence.system: <name>`; layer annotation `manifest-sha256`. The server lists the tags once (with the per-repository listing), keeps `<system>.<this repo>.<candidate commit>`, pulls, verifies the generation and that its `inputs.ndjson` includes this repository at that commit, and caches it; selection and precedence are those of M9. A missing repository (GHCR answers 401) is reported as not published, not as an error. `DEVOS_MCP_OCI_SYSTEMS_REFERENCE` overrides the location.
+- **Reason:** one request, no configuration, and a repository in several systems appears once per system.
+- **Revisit:** if a system has so many builds that the tag list gets long (then a per-system repository plus an index tag).
+- **Status:** accepted.

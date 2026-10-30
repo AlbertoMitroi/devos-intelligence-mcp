@@ -66,6 +66,7 @@ All optional; the defaults work on the owner's machine.
 | `DEVOS_MCP_SYSTEM` | `auto` | system generations: `auto` (any whose inputs include this repository), `off`, or one folder |
 | `DEVOS_MCP_MAX_ANCESTORS` | `50` | first-parent ancestors of HEAD to try before the `main-<engine>` tags |
 | `DEVOS_MCP_OCI` | `on` | `off` disables the registry (cache and local folders still work) |
+| `DEVOS_MCP_OCI_SYSTEMS_REFERENCE` | `ghcr.io/{owner}/context-systems` | where federation publishes system generations (tags `<system>.<repo>.<commit>`) |
 | `DEVOS_MCP_OCI_REFERENCE` | `ghcr.io/{owner}/context-{repo}` | repository of the artifacts; `{owner}` and `{repo}` come from the `origin` remote; an `http://` prefix means a plain-HTTP registry |
 | `DEVOS_MCP_REGISTRY_USER`, `DEVOS_MCP_REGISTRY_TOKEN` (or `GHCR_TOKEN`) | see below | credentials for private packages (a token with `read:packages`); never printed |
 | `DEVOS_MCP_GH_TOKEN` | `0` | `1` allows `gh auth token` as the last credential source for ghcr.io |

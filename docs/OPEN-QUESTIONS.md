@@ -6,4 +6,4 @@
 | Q2 | System generations (federation). | federation session | resolved: decision M9, tested on `lab-system` and `eshoponabp-system` |
 | Q3 | The `context-*` packages are created private. | owner | resolved: the lab packages are public (anonymous pull tested 2026-10-30); private ones keep working with a token |
 | Q4 | Publishing this repository (GitHub, image, CI). | owner | resolved: public repository and CI (M1); image release open |
-| Q5 | Publishing system generations as OCI artifacts (today they are read from local folders only). | coordinator, federation | open |
+| Q5 | Publishing system generations as OCI artifacts. | coordinator, federation | resolved: decision M11 (`ghcr.io/<owner>/context-systems`); reader done, waits for the first publication |
