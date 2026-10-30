@@ -23,7 +23,8 @@ work="$root/.verify"
 net="devos-mcp-verify-$$"
 registry_image="registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
 oras_image="ghcr.io/oras-project/oras:v1.3.6@sha256:9cfb578be975b762fd898b9d004243d8003aeb807a3e15b2ed212cdd1326c9eb"
-lab_commit="e21eef1712b25463d61687efc2f547d9dc0949f1"
+lab_commit="$(sed -n 's/.*"commit":"\([0-9a-f]\{40\}\)".*/\1/p' "$generations/lab-web-angular/manifest.json")"
+[ -n "$lab_commit" ]
 
 step() { printf '\n== %s\n' "$*"; }
 cleanup() {
@@ -43,7 +44,7 @@ docker build --target runtime -t "$tag:local" "$root"
 
 step "runtime self-check"
 docker run --rm --network none "$tag:local" --version
-[ "$(docker run --rm --network none "$tag:local" tools | wc -l | tr -d ' ')" = "13" ]
+[ "$(docker run --rm --network none "$tag:local" tools | wc -l | tr -d ' ')" = "14" ]
 [ "$(docker run --rm --entrypoint id "$tag:local" -u)" != "0" ]
 [ "$(docker run --rm --entrypoint sh "$tag:local" -c 'ls /opt/devos-intelligence-mcp')" = "$(printf 'package.json\nschema\nsrc')" ]
 

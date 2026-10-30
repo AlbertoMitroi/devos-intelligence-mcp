@@ -9,6 +9,7 @@ import { Resolver, type Resolution } from '../../src/resolve/resolver.ts';
 import { TOOLS, runTool } from '../../src/mcp/tools.ts';
 import { canonicalRoute } from '../../src/format.ts';
 import { CONTRACT, ESHOP, ESHOP_COMMIT, GENERATIONS, LAB_LEASING, LAB_LEASING_REMOTE, LAB_WEB, LAB_WEB_COMMIT, LAB_WEB_REMOTE, cloneAt, git, skipUnless } from './env.ts';
+import { IndexReader } from '../../src/generation/index-reader.ts';
 import { execFileSync } from 'node:child_process';
 import { INDEX_SQL } from '../../src/generation/index-schema.ts';
 import { tmp } from '../helpers.ts';
@@ -27,13 +28,16 @@ function call(res: Resolution, name: string, args: Record<string, unknown> = {})
   return out.text;
 }
 
+/** The commit a local generation was made from (generations are regenerated as the engines evolve). */
+const commitOf = (name: string): string => JSON.parse(readFileSync(join(GENERATIONS, name, 'manifest.json'), 'utf8')).commit;
+
 test('lab-web at the analyzed commit: exact match and ground-truth answers', { skip: skipUnless(GENERATIONS, LAB_WEB) }, async () => {
   const dir = cloneAt(LAB_WEB, LAB_WEB_COMMIT, LAB_WEB_REMOTE);
   const res = await resolveAt(dir);
   assert.equal(res.loaded.length, 1);
   assert.equal(res.loaded[0].label, 'lab-web-angular');
   assert.equal(res.distance, 0);
-  assert.match(call(res, 'generation_info'), /^generation lab-web-angular \(angular-intelligence 0.1.0, contract 1.1\) at e21eef1712b2, exact match for HEAD/);
+  assert.match(call(res, 'generation_info'), new RegExp(`^generation lab-web-angular \\(angular-intelligence [\\d.]+, contract 1\\.\\d\\) at ${LAB_WEB_COMMIT.slice(0, 12)}, exact match for HEAD`));
 
   // web-http-calls: every service call of the ground truth is listed with its method, route and caller.
   const truth = readFileSync(join(LAB_WEB, 'ground-truth.yml'), 'utf8');
@@ -69,7 +73,7 @@ test('lab-web two commits ahead: nearest ancestor with a warning in every answer
   assert.equal(res.commit, LAB_WEB_COMMIT);
   assert.equal(res.distance, 2);
   for (const tool of ['routes', 'http', 'context'] as const) {
-    assert.match(call(res, tool).split('\n')[0], /^WARNING generation lab-web-angular .* is for e21eef1712b2, the nearest analyzed ancestor of HEAD [0-9a-f]{12} \(2 commit\(s\) behind\); 1 file\(s\) changed since/);
+    assert.match(call(res, tool).split('\n')[0], new RegExp(`^WARNING generation lab-web-angular .* is for ${LAB_WEB_COMMIT.slice(0, 12)}, the nearest analyzed ancestor of HEAD [0-9a-f]{12} \\(2 commit\\(s\\) behind\\); 1 file\\(s\\) changed since`));
   }
   assert.match(call(res, 'http', { route: '/v1/leases' }), /src\/app\/features\/leases\/leases.service.ts:\d+ \[changed\]/);
   assert.match(call(res, 'http', { route: '/v1/quotes' }), /quotes.service.ts:\d+\n/, 'unchanged files are not marked');
@@ -128,4 +132,45 @@ test('vendored index.sql equals devos-intelligence-contract at the vendored tag'
   const upstream = execFileSync('git', ['-C', CONTRACT, 'show', `${vendor.tag}:${vendor.path}/index.sql`], { encoding: 'utf8' });
   assert.equal(readFileSync(INDEX_SQL, 'utf8'), upstream);
   assert.equal(execFileSync('git', ['-C', CONTRACT, 'rev-parse', `${vendor.tag}^{commit}`], { encoding: 'utf8' }).trim(), vendor.commit);
+});
+
+test('lab-leasing trace: every MediatR item of the ground truth, endpoint to handler in three exact steps', { skip: skipUnless(GENERATIONS, LAB_LEASING) }, async () => {
+  const res = await resolveAt(cloneAt(LAB_LEASING, commitOf('lab-leasing-dotnet'), LAB_LEASING_REMOTE));
+  // leasing-mediatr: one controller action per line of the ground truth, and the handler class that receives it.
+  const pairs: [string, string, string][] = [
+    ['ApplicationsController.Search', 'SearchFlowsQuery', 'SearchFlowsQueryHandler'],
+    ['LeasesController.Get', 'GetFlowQuery', 'GetFlowQueryHandler'],
+    ['ApplicationsController.Review', 'ReviewApplicationCommand', 'UserTaskCommandHandlers'],
+    ['QuotesController.Recalculate', 'ExecuteFlowActionCommand', 'ExecuteFlowActionCommandHandler'],
+    ['AssessmentsController.Assess', 'AssessRiskCommand', 'UserTaskCommandHandlers'],
+    ['QuotesController.Accept', 'AcceptQuoteCommand', 'UserTaskCommandHandlers'],
+    ['LeasesController.Sign', 'SignContractCommand', 'UserTaskCommandHandlers'],
+    ['LeasesController.GetDocument', 'GetLeaseDocumentQuery', 'PortfolioQueryHandlers'],
+    ['AdminController.Portfolio', 'GetPortfolioSummaryQuery', 'PortfolioQueryHandlers'],
+  ];
+  for (const [action, request, handler] of pairs) {
+    const out = call(res, 'trace', { from: action, to: handler });
+    assert.match(out, new RegExp(`\\n${handler}  \\(3 step\\(s\\), weakest link: step \\d, exact\\)\\n  1\\. inprocess.send exact  inprocess.send ${request}  src/Leasing.Host/Controllers/V1/\\w+.cs:\\d+\\n  2\\. link.dispatches_to exact  inprocess.handler ${request}`), `${action} -> ${request} -> ${handler}\n${out}`);
+  }
+  const open = call(res, 'trace', { from: 'LeasesController.Sign', limit: 100 });
+  assert.match(open, /messaging.subscribe .*FlowEventsAppended .*weakest link: step \d, candidate/);
+});
+
+test('v1.2 generations: observation locations are their site evidence', { skip: skipUnless(GENERATIONS) }, () => {
+  for (const name of ['lab-web-angular', 'lab-leasing-dotnet', 'lab-core-dotnet', 'lab-pricing-dotnet', 'lab-intake-dotnet', 'eshoponabp-angular', 'eshoponabp-dotnet']) {
+    const { reader } = IndexReader.open(join(GENERATIONS, name, 'index.sqlite'));
+    assert.ok(reader, name);
+    const rows = reader!.all('select id, kind, path, line, json from observations');
+    let withSite = 0;
+    for (const row of rows) {
+      const site = JSON.parse(row.json).site;
+      if (!site) continue;
+      withSite++;
+      const ev = reader!.one('select path, line from evidence where id = ?', site);
+      const o: Record<string, unknown> = reader!.observation(row.id)!;
+      assert.deepEqual([o._path, o._line], [ev?.path, ev?.line], `${name} ${row.id}`);
+    }
+    assert.equal(withSite, rows.length, `${name}: every observation carries site`);
+    reader!.close();
+  }
 });

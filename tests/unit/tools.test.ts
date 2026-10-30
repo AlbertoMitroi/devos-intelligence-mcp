@@ -25,8 +25,8 @@ function call(res: Resolution, name: string, args: Record<string, unknown> = {})
   return body.join('\n');
 }
 
-test('tool list: thirteen tools with object schemas', () => {
-  assert.deepEqual(TOOLS.map((t) => t.name), ['generation_info', 'search', 'symbol', 'refs', 'callers', 'callees', 'implementations', 'di', 'routes', 'http', 'who_calls', 'messages', 'context']);
+test('tool list: fourteen tools with object schemas', () => {
+  assert.deepEqual(TOOLS.map((t) => t.name), ['generation_info', 'search', 'symbol', 'refs', 'callers', 'callees', 'implementations', 'di', 'routes', 'http', 'who_calls', 'messages', 'trace', 'context']);
   for (const t of TOOLS) assert.equal((t.inputSchema as { type: string }).type, 'object');
 });
 
@@ -175,4 +175,20 @@ test('partial generation: an empty answer says absence is not proof', async () =
   const res = await setupDotnet('partial');
   const tool = TOOLS.find((t) => t.name === 'routes')!;
   assert.match(runTool(tool, res, { prefix: '/nothing' }).text, /no routes under '\/nothing'\nnote: shop-angular is partial; an absence of results is not proof of absence/);
+});
+
+test('trace: open search to service-side observations, a target, the weakest link, errors', async () => {
+  const res = await setupDotnet();
+  const open = call(res, 'trace', { from: 'OrderList.ngOnInit' });
+  assert.match(open, /^trace from OrderList.ngOnInit to service-side observations, depth 8\n/);
+  assert.match(open, /\nhttp.endpoint GET \/v1\/orders {2}\(4 step\(s\), weakest link: step 1, exact\)\n {2}1\. calls_declared_target exact {2}OrderList.refresh {2}src\/app\/order-list.ts:11\n {2}2\. calls_declared_target exact {2}OrdersService.load {2}src\/app\/order-list.ts:15\n {2}3\. http.call exact {2}http.call GET \/v1\/orders {2}src\/app\/orders.service.ts:13\n {2}4\. link.configured_route exact {2}http.endpoint GET \/v1\/orders {2}src\/Api\/OrdersController.cs:20/);
+  assert.match(open, /\nmessaging.subscribe Shop.Events.OrderPlaced {2}\(4 step\(s\)/);
+  assert.match(call(res, 'trace', { from: 'OrderList.ngOnInit', to: 'SqlRepo' }), /\nSqlRepo {2}\(1 step\(s\), weakest link: step 1, candidate\)\n {2}1\. possible_runtime_target candidate {2}SqlRepo/);
+  assert.match(call(res, 'trace', { from: 'OrderList.ngOnInit', to: 'obs:sub1' }), /\nmessaging.subscribe Shop.Events.OrderPlaced {2}\(4 step\(s\)/);
+  assert.match(call(res, 'trace', { from: 'OrderList.ngOnInit', to: 'Repo' }), /no path within 8 steps/);
+  assert.match(call(res, 'trace', { from: 'load' }), /'load' is ambiguous; pass one of:/);
+  assert.match(call(res, 'trace', { from: 'OrderList.ngOnInit', depth: 2 }), /no service-side observation reachable within 2 steps/);
+  const who = call(res, 'who_calls', { route: 'GET /v1/orders' });
+  assert.match(who, /served by GET \/v1\/orders -> OrdersController.List {2}src\/Api\/OrdersController.cs:20\n {2}linked caller configured_route candidate: http.call GET \/api\/shop\/v1\/orders\/\{\} caller OrdersService.get {2}src\/app\/orders.service.ts:17/);
+  assert.doesNotMatch(who, /linked caller .*\/v1\/orders caller OrdersService.load/, 'a caller matched by route is listed once, below');
 });

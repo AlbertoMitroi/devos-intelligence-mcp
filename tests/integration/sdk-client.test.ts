@@ -25,6 +25,7 @@ const SESSION: [string, Record<string, unknown>][] = [
   ['refs', { symbol: 'LeasesService', limit: 5 }],
   ['callees', { symbol: 'LeaseDetail.ngOnInit' }],
   ['messages', {}],
+  ['trace', { from: 'LeaseDetail.ngOnInit', to: 'LeasesService' }],
   ['context', { project: '.', cursor: '0' }],
 ];
 
@@ -45,7 +46,7 @@ test('official SDK client: initialize, list tools, call each tool', { skip: skip
     assert.equal(info?.name, 'devos-intelligence-mcp');
     assert.match(client.getInstructions() ?? '', /WARNING/);
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 13);
+    assert.equal(tools.length, 14);
     lines.push(
       '# MCP session transcript: lab-web-angular',
       '',

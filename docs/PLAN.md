@@ -51,6 +51,7 @@ All take optional `generation` (label filter when several are loaded), and the l
 | `http` | `route` prefix, `method` | outgoing HTTP calls (`http.call`): method, canonical route, resolution, base address source, caller, `file:line` |
 | `who_calls` | `route`, `method` | the HTTP calls whose canonical route matches (parameters normalized to `{}`), their caller methods and the callers of those, plus `configured_route` links to endpoints when present |
 | `messages` | `contract` | publishers and subscribers (contract, transport, destination) with `file:line` and their links (added with the .NET index additions) |
+| `trace` | `from`, `to`, `depth` | shortest path from a symbol across calls, observations and links to a target (symbol, observation, project), or to every reachable service-side observation; weakest link named (the contract's optional `trace` verb) |
 | `context` | `project` (optional) | without a project: the list of context packs; with one: that card, paged |
 
 ## Layout
@@ -76,7 +77,8 @@ All take optional `generation` (label filter when several are loaded), and the l
 5. **MCP clients**: the official SDK client (`StdioClientTransport`) lists the tools and calls each against `lab-web-angular`; a scripted session transcript goes into `docs/reports/`.
 6. **.NET**: `lab-leasing-dotnet` with its `index.sqlite`: the 16 endpoints of `ground-truth.yml` (`leasing-endpoints`), messages with configuration destinations, a type preferred over its constructor.
 7. **Contract**: the vendored `index.sql` equals `devos-intelligence-contract` at the vendored tag (integration) and its recorded SHA-256 (unit).
-8. **Real registry** (opt-in, `MCP_VERIFY_GHCR=1`): anonymous pull of the latest published `<sha>-angular` of `context-devos-lab-web` and `<sha>-dotnet` of `context-devos-lab-leasing` from ghcr.io, exact and one commit ahead (then from the cache).
+8. **v1.2 generations**: every observation of the seven v1.2 generations is located at its `site`; `trace` reproduces the 9 lines of `leasing-mediatr` in `devos-lab-leasing/ground-truth.yml` (controller action, `inprocess.send`, `dispatches_to`, handler, all exact).
+9. **Real registry** (opt-in, `MCP_VERIFY_GHCR=1`): anonymous pull of the latest published `<sha>-angular` of `context-devos-lab-web` and `<sha>-dotnet` of `context-devos-lab-leasing` from ghcr.io, exact and one commit ahead (then from the cache).
 
 ## Not in scope now
 

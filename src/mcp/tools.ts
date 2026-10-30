@@ -4,6 +4,7 @@
 import { canonicalRoute, limitOf, loc, offsetOf, page, pageFooter, routeMatch, shortName } from '../format.ts';
 import { snippet } from '../redact.ts';
 import { findPack, listPacks, readPack } from '../generation/context-packs.ts';
+import { Tracer } from '../generation/trace.ts';
 import type { Row } from '../generation/index-reader.ts';
 import { freshness, type Freshness, type Loaded, type Resolution } from '../resolve/resolver.ts';
 
@@ -178,7 +179,7 @@ const search: ToolDef = {
           const o = r.observation(x.ref);
           return { g, lines: lines(`observation ${o?.kind ?? ''} ${o ? loc(o._path, o._line, ctx.fresh.changed) : x.ref}`, quote(x.text)) };
         }
-        const ev = r.one('select path, line from evidence where text = ? order by path, line limit 1', x.text);
+        const ev = r.snippetLocation(x.ref, x.text);
         return { g, lines: lines(`snippet ${ev ? loc(ev.path, ev.line, ctx.fresh.changed) : x.ref}`, quote(x.text)) };
       });
     });
@@ -389,12 +390,21 @@ const whoCalls: ToolDef = {
     const { items, notes } = withIndex(ctx, (g) => {
       const r = g.reader!;
       const out: Item[] = [];
+      const calls = r.observations(['http.call']).filter((o) => o.canonicalRoute && routeMatch(String(o.canonicalRoute), want.route) && (!method || o.method === method));
+      const matched = new Set(calls.map((c) => c.id));
       for (const ep of r.observations(['http.endpoint'])) {
         if (routeMatch(String(ep.canonicalRoute ?? ''), want.route) === 'exact' && (!method || ep.method === method)) {
-          out.push({ g, lines: [`served by ${ep.method} ${ep.routeTemplate ?? ep.canonicalRoute} -> ${shortName(ep.handler)}  ${loc(ep._path, ep._line, ctx.fresh.changed)}`] });
+          const block = [`served by ${ep.method} ${ep.routeTemplate ?? ep.canonicalRoute} -> ${shortName(ep.handler)}  ${loc(ep._path, ep._line, ctx.fresh.changed)}`];
+          // Callers the engine or a federation linked to this endpoint (the `calls-to` verb), whatever their route text.
+          // Calls matched by route are listed below with their callers; here only the ones linked under another route text.
+          for (const l of r.linksTo([ep.id])) {
+            const from = r.observation(l.from_obs);
+            if (!from || matched.has(from.id)) continue;
+            block.push(`  linked caller ${l.kind} ${l.resolution}: ${from.kind} ${from.method ?? ''} ${from.canonicalRoute ?? ''} caller ${shortName(from.caller ?? from.sender)}  ${loc(from._path, from._line, ctx.fresh.changed)}`.replace(/\s{2,}(?=caller)/, ' '));
+          }
+          out.push({ g, lines: block });
         }
       }
-      const calls = r.observations(['http.call']).filter((o) => o.canonicalRoute && routeMatch(String(o.canonicalRoute), want.route) && (!method || o.method === method));
       const links = r.linksFrom(calls.map((c) => c.id));
       for (const c of calls) {
         const match = routeMatch(String(c.canonicalRoute), want.route);
@@ -466,6 +476,68 @@ const messages: ToolDef = {
   },
 };
 
+/** One line naming a trace node: an entity by short name, an observation by kind and its main field. */
+function nodeName(g: Loaded, node: string): string {
+  if (!node.startsWith('obs:') && !node.includes('/obs:')) return shortName(node);
+  const o = g.reader!.observation(node);
+  if (!o) return node;
+  const what = o.canonicalRoute ? `${o.method ?? ''} ${o.canonicalRoute}`.trim()
+    : o.contract ? contractName(o.contract)
+    : o.request ? shortName(o.request)
+    : o.service && typeof o.service === 'string' ? shortName(o.service)
+    : o.route ?? o.key ?? o.name ?? '';
+  return `${o.kind} ${what}`.trim();
+}
+
+const trace: ToolDef = {
+  name: 'trace',
+  description: 'Path across code and services from a symbol (or observation id): calls, observations made in a method (HTTP calls, sends, publishes), links between observations (dispatch, messaging, routes) and the handlers that serve them. With `to` (symbol, observation id or project), the shortest path; without, every reachable service-side observation (endpoints, handlers, subscribers). Each path names its weakest link.',
+  inputSchema: schema({ from: symbolArg, to: { type: 'string', description: 'Target symbol, observation id or project path. Optional.' }, depth: { type: 'integer', minimum: 1, maximum: 12, description: 'Maximum steps (default 8).' }, ...paging }, ['from']),
+  run(ctx) {
+    const from = str(ctx.args.from);
+    if (!from) return 'missing from';
+    const to = str(ctx.args.to);
+    const depth = Math.min(Math.max(Number(ctx.args.depth ?? 8) || 8, 1), 12);
+    const messages: string[] = [];
+    const multi = ctx.gens.length > 1;
+    const items: Item[] = [];
+    for (const g of ctx.gens) {
+      const tag = multi ? `[${g.label}] ` : '';
+      if (!g.reader) {
+        messages.push(`${tag}${g.readerError}`);
+        continue;
+      }
+      const tracer = new Tracer(g.reader);
+      const resolveEntity = (t: string): string | null => {
+        const m = g.reader!.resolveSymbol(t);
+        if ('entity' in m) return m.entity.id;
+        messages.push(`${tag}${'candidates' in m ? `'${t}' is ambiguous; pass one of: ${m.candidates.slice(0, 5).map((c) => c.id).join(', ')}` : m.none}`);
+        return null;
+      };
+      const start = tracer.isObservation(from) ? (g.reader.observation(from) ? from : (messages.push(`${tag}no observation ${from}`), null)) : resolveEntity(from);
+      if (!start) continue;
+      let target: ((n: string) => boolean) | null = null;
+      if (to) {
+        const t = tracer.targetOf(to, resolveEntity);
+        if (typeof t === 'string') {
+          if (!messages.some((m) => m.includes(to))) messages.push(`${tag}${t}`);
+          continue;
+        }
+        target = t;
+      }
+      for (const p of tracer.trace(start, target, depth)) {
+        const lines = [`${nodeName(g, p.to)}  (${p.steps.length} step(s), weakest link: step ${p.weakest.step}, ${p.weakest.resolution})`];
+        p.steps.forEach((s, i) => lines.push(`  ${i + 1}. ${s.kind} ${s.resolution}  ${nodeName(g, s.to)}  ${loc(s.path, s.line, ctx.fresh.changed)}`));
+        items.push({ g, lines });
+      }
+      messages.push(`${tag}trace from ${nodeName(g, start)}${to ? ` to ${to}` : ' to service-side observations'}, depth ${depth}`);
+    }
+    // A symbol found in one generation is enough; "not found" from the others is noise then.
+    const shown = items.length ? messages.filter((m) => !/no entity|no observation/.test(m)) : messages;
+    return join(shown, render(ctx, items, 'paths', to ? `no path within ${depth} steps` : `no service-side observation reachable within ${depth} steps`));
+  },
+};
+
 const PACK_PAGE = 6000;
 
 const context: ToolDef = {
@@ -504,7 +576,7 @@ const context: ToolDef = {
   },
 };
 
-export const TOOLS: ToolDef[] = [generationInfo, search, symbol, refs, callGraph('callers'), callGraph('callees'), implementations, di, routes, http, whoCalls, messages, context];
+export const TOOLS: ToolDef[] = [generationInfo, search, symbol, refs, callGraph('callers'), callGraph('callees'), implementations, di, routes, http, whoCalls, messages, trace, context];
 
 /** Runs a tool against a resolution: freshness header first, then the tool's answer. */
 export function runTool(tool: ToolDef, res: Resolution, args: Record<string, unknown>): { text: string; isError: boolean } {

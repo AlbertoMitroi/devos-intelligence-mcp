@@ -32,7 +32,7 @@ Without Docker, with Node.js 24.22 or later on the host:
 claude mcp add devos-intelligence --scope user -- node --disable-warning=ExperimentalWarning ~/repos/devos/devos-intelligence-mcp/src/cli.ts serve
 ```
 
-Check with `claude mcp list`; inside a session, `/mcp` shows the server and its 13 tools.
+Check with `claude mcp list`; inside a session, `/mcp` shows the server and its 14 tools.
 
 ## Codex
 
@@ -111,6 +111,7 @@ node src/cli.ts verify ~/repos/devos/_generations/lab-web-angular
 | `http` | `route`, `method` | outgoing HTTP calls with base address source and caller |
 | `who_calls` | `route`, `method`, `depth` | calls matching the route, their callers, links to the endpoint |
 | `messages` | `contract` | publishers and subscribers with transport, destination and links |
+| `trace` | `from`, `to`, `depth` | shortest path across calls, observations and links (dispatch, messaging, routes), weakest link named; without `to`, every reachable endpoint, handler or subscriber |
 | `context` | `project`, `cursor` | context pack cards |
 
 Every tool takes `generation` to pick one of several loaded generations; list tools take `limit` (default 20, max 100) and `cursor`. A symbol is an entity id, a name, or a qualified tail (`LeasesService.search`); an ambiguous one lists candidate ids.

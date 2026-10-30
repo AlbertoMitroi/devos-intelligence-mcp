@@ -95,7 +95,7 @@ export function writeGeneration(dir: string, o: GenOptions): string {
     evidence('src/app/order-list.ts', 11, 'this.refresh();');
     evidence('src/app/order-list.ts', 15, 'this.orders.load().subscribe((o) => this.rows.set(o));');
     let rel = 0;
-    const relation = (kind: string, from: string, to: string, usage: string | null, path: string, line: number) => ins('relations', `rel:${++rel}`, kind, from, to, usage, 'exact', CTX, path, line, null);
+    const relation = (kind: string, from: string, to: string, usage: string | null, path: string, line: number) => ins('relations', `rel:${++rel}`, kind, from, to, usage, kind === 'possible_runtime_target' ? 'candidate' : 'exact', CTX, path, line, null);
     relation('calls_declared_target', IDS.load, IDS.http, null, 'src/app/orders.service.ts', 13);
     relation('calls_declared_target', IDS.get, IDS.http, null, 'src/app/orders.service.ts', 17);
     relation('calls_declared_target', IDS.listInit, IDS.refresh, null, 'src/app/order-list.ts', 11);
@@ -131,6 +131,8 @@ export function writeGeneration(dir: string, o: GenOptions): string {
       evidence('src/app/archive.service.ts', 9, 'public Task Consume(OrderPlaced message)');
       obs('obs:sub1', 'messaging.subscribe', 'src/app/archive.service.ts', 5, { site: `ev:${ev}`, contract: { entity: 'ts:.:src/app/events#OrderPlaced', fullName: 'Shop.Events.OrderPlaced', name: 'OrderPlaced' }, handler: IDS.other, transport: 'kafka', destination: { kind: 'topic', name: 'orders.placed', nameSource: 'literal' } });
       ins('links', 'lnk:4', 'consumes_contract', 'messaging', 'obs:pub1', 'obs:sub1', 'exact', null);
+      // A call linked to the endpoint under another route text (a gateway prefix), found by the linker, not by the route.
+      ins('links', 'lnk:5', 'configured_route', 'http', 'obs:call2', 'obs:ep1', 'candidate', null);
       ins('search', 'obs:ep1', 'observation', 'http.endpoint GET /v1/orders OrdersController.List');
     }
     ins('links', 'lnk:2', 'consumes_contract', 'di', 'obs:con1', 'obs:reg1', 'exact', null);

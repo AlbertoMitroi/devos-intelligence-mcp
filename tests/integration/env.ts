@@ -1,6 +1,6 @@
 // Integration test inputs, from the environment set by scripts/verify.sh (Docker mounts) or by hand on the host.
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '../helpers.ts';
 
@@ -14,7 +14,11 @@ export const GHCR = process.env.DEVOS_IT_GHCR === '1';
 export const REGISTRY = process.env.DEVOS_IT_REGISTRY ?? '';
 export const TRANSCRIPT = process.env.DEVOS_IT_TRANSCRIPT ?? '';
 
-export const LAB_WEB_COMMIT = 'e21eef1712b25463d61687efc2f547d9dc0949f1';
+/** The commit of the local lab-web generation (regenerated as the engines evolve); e21eef1 when none is mounted. */
+export const LAB_WEB_COMMIT: string = (() => {
+  const manifest = join(GENERATIONS, 'lab-web-angular', 'manifest.json');
+  return GENERATIONS && existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')).commit : 'e21eef1712b25463d61687efc2f547d9dc0949f1';
+})();
 export const LAB_WEB_REMOTE = 'https://github.com/AlbertoMitroi/devos-lab-web.git';
 export const ESHOP_COMMIT = '7bfed7a322d16b34a5a66208c03486fa5dfacee9';
 export const LAB_LEASING_REMOTE = 'https://github.com/AlbertoMitroi/devos-lab-leasing.git';

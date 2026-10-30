@@ -199,6 +199,21 @@ export class IndexReader {
     return this.all(`select * from links where from_obs in (${marks}) order by from_obs, id`, ...obsIds);
   }
 
+  linksTo(obsIds: string[]): Row[] {
+    if (obsIds.length === 0) return [];
+    const marks = obsIds.map(() => '?').join(', ');
+    return this.all(`select * from links where to_obs in (${marks}) order by to_obs, from_obs, id`, ...obsIds);
+  }
+
+  /** Where a snippet search hit is: through `evidence_snippet` when present, else the first evidence with that text. */
+  snippetLocation(ref: string, text: string): Row | undefined {
+    if (this.tables.has('evidence_snippet')) {
+      const r = this.one('select e.path, e.line from evidence_snippet es join evidence e on e.id = es.evidence where es.snippet = ? order by e.path, e.line limit 1', ref);
+      if (r) return r;
+    }
+    return this.one('select path, line from evidence where text = ? order by path, line limit 1', text);
+  }
+
   observation(id: string): Row | undefined {
     const r = this.one('select json, path, line from observations where id = ?', id);
     return r ? this.located(r) : undefined;

@@ -23,7 +23,7 @@ test('registry: pull, verify, cache, answer; then answer from the cache with the
   const g = res.loaded[0];
   assert.equal(g.source, 'oci');
   assert.equal(g.label, 'devos-lab-web-angular');
-  assert.match(g.origin, /context-devos-lab-web:e21eef1712b25463d61687efc2f547d9dc0949f1-angular$/);
+  assert.match(g.origin, new RegExp(`context-devos-lab-web:${LAB_WEB_COMMIT}-angular$`));
   assert.equal(res.distance, 1);
   assert.ok(existsSync(join(g.dir, '.devos-mcp-origin.json')));
   const out = runTool(TOOLS.find((t) => t.name === 'who_calls')!, res, { route: 'POST /v1/leases/{id}/sign' }).text;
