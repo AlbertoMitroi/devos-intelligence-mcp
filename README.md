@@ -1,0 +1,36 @@
+# devos-intelligence-mcp
+
+An MCP server that answers AI agents (Claude Code, Codex) from the intelligence generations of the repository they work in: semantic graph, observations and context packs written by `devos-dotnet-intelligence` and `devos-angular-intelligence` in the shared [intelligence contract](../devos-intelligence-contract). The agent never receives a generation, only compact answers with `file:line` evidence and short redacted snippets.
+
+**Status:** 12 tools over `index.sqlite` and context packs; generation resolved from local folders, the OCI cache or GHCR (`context-<repo>:<sha>-<engine>`), nearest analyzed ancestor announced in every answer. Unit and integration tests pass locally (`scripts/verify.sh`), including the official MCP SDK client and a `registry:2` round trip in the release layout. Not published (decision M1).
+
+## Use
+
+```bash
+docker build --target runtime -t devos-intelligence-mcp:local .
+```
+
+```bash
+claude mcp add devos-intelligence --scope user -- ~/repos/devos/devos-intelligence-mcp/scripts/mcp-docker.sh
+```
+
+Codex, configuration and tool list: [docs/USAGE.md](docs/USAGE.md).
+
+## Develop
+
+Docker and git are needed; the tests read the sibling folders (`_generations`, `devos-lab-web`).
+
+```bash
+scripts/verify.sh
+```
+
+With Node.js 24.22 or later on the host, `npm ci` then `npm test` runs the unit tests.
+
+## Documents
+
+- Plan: [docs/PLAN.md](docs/PLAN.md)
+- Decisions: [docs/DECISIONS.md](docs/DECISIONS.md)
+- Usage: [docs/USAGE.md](docs/USAGE.md)
+- Open questions: [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md)
+- Dependencies and licenses: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
+- Reports: [docs/reports/](docs/reports/)

@@ -37,14 +37,15 @@ export function pageFooter(p: { total: number; offset: number; items: unknown[];
  * Short, still resolvable name of an entity id:
  * `ts:.:src/app/x/leases.service#LeasesService.search` → `LeasesService.search`;
  * `dotnet:src/A/A.csproj:M:Ns.Sub.Type.Method(System.Guid)` → `Type.Method(Guid)`;
- * package symbols keep the package: `@angular/common@22.2.3 HttpClient.post(...)`.
+ * a module (empty symbol path) gives `module src/app/x/leases.service`;
+ * package symbols keep the package: `@angular/common HttpClient.post(...)`.
  */
 export function shortName(id: string | null | undefined): string {
   if (!id) return '(none)';
-  const ts = /^ts:(pkg:(.+?)@[^:]+:)?[^#]*#(.*)$/.exec(id);
+  const ts = /^ts:(?:pkg:(.+?)@[^:]+:|[^:]*:)([^#]*)#(.*)$/.exec(id);
   if (ts) {
-    const name = ts[3] || '(module)';
-    return ts[2] ? `${ts[2]} ${name}` : name;
+    const name = ts[3] || `module ${ts[2]}`;
+    return ts[1] ? `${ts[1]} ${name}` : name;
   }
   const dn = /^dotnet:(pkg:([^@]+)@[^:]+:[^:]+:|[^:]+:)?([A-Z]):(.*)$/.exec(id);
   if (dn) {

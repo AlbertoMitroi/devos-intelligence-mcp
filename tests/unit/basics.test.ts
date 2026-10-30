@@ -36,6 +36,7 @@ test('routes canonicalize like the contract and match exactly or by suffix', () 
 test('short names stay resolvable', () => {
   assert.equal(shortName('ts:.:src/app/x/leases.service#LeasesService.search'), 'LeasesService.search');
   assert.equal(shortName('ts:pkg:@angular/core@22.2.3:index#OnInit'), '@angular/core OnInit');
+  assert.equal(shortName('ts:.:src/app/features/leases/lease-detail#'), 'module src/app/features/leases/lease-detail');
   assert.equal(shortName('dotnet:src/A/A.csproj:M:Ns.Sub.LeasesController.Get(System.Guid,System.Threading.CancellationToken)'), 'LeasesController.Get(Guid,CancellationToken)');
   assert.equal(shortName('dotnet:src/A/A.csproj:T:Ns.Sub.LeasesController'), 'LeasesController');
   assert.equal(shortName('dotnet:pkg:Pricing.Client@1.1.0:Pricing.Client:T:Pricing.Client.IPricingClient'), 'Pricing.Client IPricingClient');
