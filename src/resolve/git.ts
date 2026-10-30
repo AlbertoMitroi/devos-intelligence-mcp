@@ -10,9 +10,10 @@ export interface Workspace {
   slug: { host: string; owner: string; name: string } | null;
 }
 
-function git(cwd: string, args: string[]): string | null {
+function git(cwd: string, args: string[], trim = true): string | null {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 }).trim();
+    const out = execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    return trim ? out.trim() : out;
   } catch {
     return null;
   }
@@ -69,8 +70,9 @@ export function isAncestor(root: string, commit: string, of = 'HEAD'): boolean {
 /** Files that differ between `commit` and the working tree (committed changes plus uncommitted ones), repository-relative. */
 export function changedSince(root: string, commit: string): { files: Set<string>; dirty: boolean; known: boolean } {
   const files = new Set<string>();
-  const status = git(root, ['status', '--porcelain=v1', '--untracked-files=normal']);
-  const dirty = !!status;
+  // Porcelain lines start with a two-letter status that may begin with a space: never trim them.
+  const status = git(root, ['status', '--porcelain=v1', '--untracked-files=normal'], false);
+  const dirty = !!status?.trim();
   for (const line of (status ?? '').split('\n').filter(Boolean)) {
     const path = line.slice(3);
     for (const p of path.split(' -> ')) files.add(p.replace(/^"|"$/g, ''));

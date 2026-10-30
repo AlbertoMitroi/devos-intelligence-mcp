@@ -448,7 +448,7 @@ const context: ToolDef = {
     let end = Math.min(offset + PACK_PAGE, text.length);
     if (end < text.length) {
       const nl = text.lastIndexOf('\n', end);
-      if (nl > offset) end = nl + 1;
+      if (nl > offset + PACK_PAGE / 2) end = nl + 1;
     }
     const body = text.slice(offset, end);
     const marked = body.replace(/`([^`\s]+):(\d+)`/g, (m, path: string) => (ctx.fresh.changed.has(path) ? `${m} [changed]` : m));

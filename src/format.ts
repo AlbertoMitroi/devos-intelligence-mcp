@@ -78,7 +78,8 @@ export function canonicalRoute(input: string): { method: string | null; route: s
     method = m[1].toUpperCase();
     s = s.slice(m[0].length);
   }
-  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '').replace(/[?#].*$/, '');
+  // The query starts at a `?` that is not the optional marker inside `{name?}`.
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '').replace(/#.*$/, '').replace(/\?[^}]*$/, '');
   const segs = s.split('/').filter(Boolean).map((seg) => {
     if (/^\{\*{1,2}[^}]*\}$/.test(seg)) return '{**}';
     if (/^\{[^}]*\?\}$/.test(seg) || /^:\w+\?$/.test(seg)) return '{?}';
