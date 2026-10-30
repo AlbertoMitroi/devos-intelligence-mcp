@@ -165,7 +165,7 @@ test('.NET index additions: per-usage refs, runtime targets, observation search,
   const m = call(res, 'messages');
   assert.match(m, /publish {2}OrderPlaced {2}kafka {2}topic orders.placed \(configuration\) {2}by OrdersService.load {2}src\/app\/orders.service.ts:20\n {2}link consumes_contract exact -> messaging.subscribe by ArchiveService.load src\/app\/archive.service.ts:9/, 'the site wins over the row location');
   assert.match(m, /subscribe Shop.Events.OrderPlaced {2}kafka/, 'a .NET contract object prints its full name');
-  assert.match(call(res, 'messages', { contract: 'shop.events' }), /1-1 of 1 messaging facts/);
+  assert.match(call(res, 'messages', { contract: 'shop.events' }), /1-2 of 2 messaging facts/, 'the subscriber matches by name, its publisher through their link');
   assert.match(call(res, 'symbol', { symbol: 'OrdersService' }), /^class OrdersService/, 'the type wins over its constructor');
   assert.match(call(res, 'messages', { contract: 'nothing' }), /no publisher or subscriber matches 'nothing'/);
   assert.match(call(res, 'generation_info'), /index schema 1, entities/);

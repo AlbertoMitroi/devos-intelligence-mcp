@@ -1,7 +1,7 @@
 // The MCP tools (PLAN, Tools). Every answer starts with the freshness header, lists `file:line` evidence with one-line
 // redacted snippets, and is bounded by `limit` and `cursor`. Several loaded generations are queried together and each
 // item is tagged with its generation label.
-import { canonicalRoute, limitOf, loc, offsetOf, page, pageFooter, routeMatch, shortName } from '../format.ts';
+import { canonicalRoute, inputOf, limitOf, loc, offsetOf, page, pageFooter, routeMatch, shortName } from '../format.ts';
 import { snippet } from '../redact.ts';
 import { findPack, listPacks, readPack } from '../generation/context-packs.ts';
 import { Tracer } from '../generation/trace.ts';
@@ -29,6 +29,14 @@ const paging = {
   limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Items per page (default 20, max 100).' },
   cursor: { type: 'string', description: 'Opaque cursor from the previous page.' },
 };
+const scopeArg = { scope: { type: 'string', enum: ['repo', 'system'], description: 'In a system generation: `repo` (default) only this repository\'s input, `system` every input.' } };
+
+/** In a system generation, list tools keep this repository's input unless `scope: system`. */
+function inScope(ctx: ToolContext, g: Loaded, recordId: string | null | undefined): boolean {
+  if (!g.system || ctx.args.scope === 'system') return true;
+  return g.system.mine.includes(inputOf(recordId) ?? '');
+}
+
 const symbolArg = { type: 'string', description: 'Entity id, exact name, or qualified tail such as `LeasesService.search`.' };
 
 function schema(props: Record<string, unknown>, required: string[] = []) {
@@ -36,6 +44,17 @@ function schema(props: Record<string, unknown>, required: string[] = []) {
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+/**
+ * A location in an answer. In a system generation every record id starts with its input (`leasing/ev:...`), and the
+ * location says which repository it is in: `[leasing] src/...:36`. Only this repository's files can be [changed].
+ */
+function at(ctx: ToolContext, path: string | null | undefined, line: number | bigint | null | undefined, recordId: string | null | undefined): string {
+  const input = inputOf(recordId);
+  const changed = !input || ctx.fresh.inputs.includes(input) ? ctx.fresh.changed : EMPTY;
+  return `${input ? `[${input}] ` : ''}${loc(path, line, changed)}`;
+}
+const EMPTY = new Set<string>();
 
 interface Item {
   g: Loaded;
@@ -88,14 +107,14 @@ function resolveEach(ctx: ToolContext, term: string): { found: { g: Loaded; e: R
       messages.push(`${tag}${g.readerError}`);
       continue;
     }
-    const m = g.reader.resolveSymbol(term);
+    const m = g.reader.resolveSymbol(term, g.system?.mine ?? []);
     if ('entity' in m) found.push({ g, e: m.entity });
     else if ('candidates' in m) {
       const decl = (id: string) => g.reader!.firstDeclaration(id);
       messages.push(`${tag}'${term}' is ambiguous (${m.total}${m.total > 10 ? '+' : ''} candidates); pass one id:`);
       for (const c of m.candidates) {
         const d = decl(c.id);
-        messages.push(`  ${c.kind} ${c.id}${d ? `  ${loc(d.path, d.line, ctx.fresh.changed)}` : ''}`);
+        messages.push(`  ${c.kind} ${c.id}${d ? `  ${at(ctx, d.path, d.line, c.id)}` : ''}`);
       }
     } else messages.push(`${tag}${m.none}`);
   }
@@ -143,6 +162,7 @@ const generationInfo: ToolDef = {
         `  source ${g.source}: ${g.origin}`,
         `  engine ${m.engine?.name ?? '?'} ${m.engine?.version ?? ''}, contract ${m.schemaVersion}, status ${m.status ?? '?'}, commit ${m.commit}`,
         `  verified: manifest SHA-256 ${g.manifestSha256.slice(0, 16)}..., ${m.files?.length ?? 0} listed files checked${g.notes.length ? `; notes: ${g.notes.join('; ')}` : ''}`,
+        ...(g.system ? [`  system ${g.system.name}, this repository is input ${g.system.mine.join(' and ')} at ${g.system.commit.slice(0, 12)}${g.system.secondary ? ` (secondary: ${g.system.distance} commit(s) behind; cross-repository tools only)` : ''}`, ...g.system.inputs.map((i) => `    input ${i.id}${i.included ? '' : ' (not included)'}: ${i.remoteUrl ?? '(no remote)'} at ${i.commit.slice(0, 12)}, ${i.engine ?? '?'}`)] : []),
         `  coverage ${cov}`,
         `  index ${counts}`,
         `  context packs ${packs.length}${packs.length ? `: ${packs.slice(0, 8).map((p) => p.project ?? p.path.replace(/^context\//, '')).join(', ')}${packs.length > 8 ? ', ...' : ''}` : ''}`,
@@ -158,7 +178,7 @@ const generationInfo: ToolDef = {
 const search: ToolDef = {
   name: 'search',
   description: 'Full-text search over entity names and signatures and over redacted code snippets of the generation. Returns kind, compact name or file:line, and one line of text.',
-  inputSchema: schema({ query: { type: 'string', description: 'Words to match (prefix match from 3 characters).' }, kind: { type: 'string', enum: ['entity', 'snippet', 'observation'], description: 'observation: endpoints, calls, config keys, messages (when the engine indexes them).' }, ...paging }, ['query']),
+  inputSchema: schema({ query: { type: 'string', description: 'Words to match (prefix match from 3 characters).' }, kind: { type: 'string', enum: ['entity', 'snippet', 'observation'], description: 'observation: endpoints, calls, config keys, messages (when the engine indexes them).' }, ...scopeArg, ...paging }, ['query']),
   run(ctx) {
     const q = str(ctx.args.query);
     if (!q) return 'missing query';
@@ -167,20 +187,22 @@ const search: ToolDef = {
     let total = 0;
     const { items, notes } = withIndex(ctx, (g) => {
       const r = g.reader!;
-      const { rows, total: t } = r.search(q, kind, want, 0);
-      total += t;
+      // In a system generation the scope filter runs after the search, so the total counts every input.
+      const { rows: found, total: t } = r.search(q, kind, g.system ? 1000 : want, 0);
+      const rows = found.filter((x) => inScope(ctx, g, x.ref));
+      total += g.system ? rows.length : t;
       return rows.map((x) => {
         if (x.kind === 'entity') {
           const e = r.entity(x.ref);
           const d = r.firstDeclaration(x.ref);
-          return { g, lines: lines(`entity ${e?.kind ?? ''} ${shortName(x.ref)}  ${d ? loc(d.path, d.line, ctx.fresh.changed) : '(no declaration: package symbol)'}`, `    id ${x.ref}`) };
+          return { g, lines: lines(`entity ${e?.kind ?? ''} ${shortName(x.ref)}  ${d ? at(ctx, d.path, d.line, x.ref) : '(no declaration: package symbol)'}`, `    id ${x.ref}`) };
         }
         if (x.kind === 'observation') {
           const o = r.observation(x.ref);
-          return { g, lines: lines(`observation ${o?.kind ?? ''} ${o ? loc(o._path, o._line, ctx.fresh.changed) : x.ref}`, quote(x.text)) };
+          return { g, lines: lines(`observation ${o?.kind ?? ''} ${o ? at(ctx, o._path, o._line, o.id) : x.ref}`, quote(x.text)) };
         }
         const ev = r.snippetLocation(x.ref, x.text);
-        return { g, lines: lines(`snippet ${ev ? loc(ev.path, ev.line, ctx.fresh.changed) : x.ref}`, quote(x.text)) };
+        return { g, lines: lines(`snippet ${ev ? at(ctx, ev.path, ev.line, x.ref) : x.ref}`, quote(x.text)) };
       });
     });
     // Each generation returned at most `want` rows; page over the merged list but report the true total.
@@ -214,7 +236,7 @@ const symbol: ToolDef = {
         e.container ? `  container ${shortName(e.container)}` : '',
         e.project ? `  project ${e.project}` : '',
         `  origin ${e.origin}`,
-        ...decls.slice(0, 5).map((d) => `  declared at ${loc(d.path, d.line, ctx.fresh.changed)}`),
+        ...decls.slice(0, 5).map((d) => `  declared at ${at(ctx, d.path, d.line, e.id)}`),
         decls.length > 5 ? `  ... ${decls.length - 5} more declarations` : '',
         `  references ${r.countRelations(['references'], 'to', e.id)}, callers ${edgesOf(g, e.id, 'callers').length}, callees ${edgesOf(g, e.id, 'callees').length}, implementations ${r.countRelations(['implements', 'inherits', 'overrides'], 'to', e.id)}`,
         members.length ? `  members (${members.length}): ${members.slice(0, 15).map((m) => shortName(m.to_id).split('.').pop()).join(', ')}${members.length > 15 ? ', ...' : ''}` : '',
@@ -235,7 +257,7 @@ const refs: ToolDef = {
     const items: Item[] = found.flatMap(({ g, e }) =>
       g.reader!.references(e.id, usage).map((x) => ({
         g,
-        lines: lines(`${loc(x.path, x.line, ctx.fresh.changed)}  ${x.usage ?? ''}  from ${shortName(x.from_id)}`, quote(x.text ?? g.reader!.snippetAt(x.path, x.line, x.context))),
+        lines: lines(`${at(ctx, x.path, x.line, x.id)}  ${x.usage ?? ''}  from ${shortName(x.from_id)}`, quote(x.text ?? g.reader!.snippetAt(x.path, x.line, x.context))),
       })),
     );
     const head = found.map(({ e }) => `references to ${shortName(e.id)}${usage ? ` (usage ${usage})` : ''}`);
@@ -264,7 +286,9 @@ function callGraph(direction: 'callers' | 'callees'): ToolDef {
             for (const x of edgesOf(g, f, direction)) {
               const other = direction === 'callers' ? x.from_id : x.to_id;
               const via = d > 1 ? `  (via ${shortName(f)})` : '';
-              items.push({ g, lines: lines(`${'  '.repeat(d - 1)}${shortName(other)}  ${loc(x.path, x.line, ctx.fresh.changed)}${via}${x.kind === 'possible_runtime_target' ? '  (possible runtime target)' : ''}`, d === 1 ? quote(g.reader!.snippetAt(x.path, x.line, x.context)) : null) });
+              const pkg = g.reader!.packageImplementation(other);
+              const implemented = pkg ? `\n${'  '.repeat(d)}  implemented by ${shortName(pkg.source)}  ${at(ctx, g.reader!.firstDeclaration(pkg.source)?.path, g.reader!.firstDeclaration(pkg.source)?.line, pkg.source)}  (consumed ${pkg.consumed}, produced ${pkg.produced ?? '?'}: versionMatch ${pkg.versionMatch ?? 'unknown'})` : '';
+              items.push({ g, lines: lines(`${'  '.repeat(d - 1)}${shortName(other)}  ${at(ctx, x.path, x.line, x.id)}${via}${x.kind === 'possible_runtime_target' ? '  (possible runtime target)' : ''}${implemented}`, d === 1 ? quote(g.reader!.snippetAt(x.path, x.line, x.context)) : null) });
               if (!seen.has(other)) {
                 seen.add(other);
                 next.push(other);
@@ -288,7 +312,7 @@ const implementations: ToolDef = {
     const term = str(ctx.args.symbol)!;
     const { found, messages } = resolveEach(ctx, term);
     const items: Item[] = found.flatMap(({ g, e }) =>
-      g.reader!.relations(['implements', 'inherits', 'overrides'], 'to', e.id).map((x) => ({ g, lines: [`${x.kind}  ${shortName(x.from_id)}  ${loc(x.path, x.line, ctx.fresh.changed)}`] })),
+      g.reader!.relations(['implements', 'inherits', 'overrides'], 'to', e.id).map((x) => ({ g, lines: [`${x.kind}  ${shortName(x.from_id)}  ${at(ctx, x.path, x.line, x.id)}`] })),
     );
     const head = found.map(({ e }) => `implementations of ${shortName(e.id)}`);
     return join([...messages, ...head], found.length ? render(ctx, items, 'implementations', 'no implementations') : '');
@@ -298,27 +322,27 @@ const implementations: ToolDef = {
 const di: ToolDef = {
   name: 'di',
   description: 'Dependency injection: registrations (lifetime or scope, implementation) and consumers (who injects it, how) of a service, with file:line; unresolved consumers say why. Without a service: all registrations.',
-  inputSchema: schema({ service: { type: 'string', description: 'Service entity (id, name or qualified tail). Optional.' }, ...paging }),
+  inputSchema: schema({ service: { type: 'string', description: 'Service entity (id, name or qualified tail). Optional.' }, ...scopeArg, ...paging }),
   run(ctx) {
     const term = str(ctx.args.service);
     const { items, notes } = withIndex(ctx, (g) => {
       const r = g.reader!;
       let ids: Set<string> | null = null;
       if (term) {
-        const m = r.resolveSymbol(term);
+        const m = r.resolveSymbol(term, g.system?.mine ?? []);
         ids = 'entity' in m ? new Set([m.entity.id]) : 'candidates' in m ? new Set(m.candidates.map((c) => c.id as string)) : new Set();
       }
-      const obs = r.observations(['di.registers', 'di.consumes']).filter((o) => (ids ? ids.has(o.service) : o.kind === 'di.registers'));
+      const obs = r.observations(['di.registers', 'di.consumes']).filter((o) => (ids ? ids.has(o.service) : o.kind === 'di.registers') && inScope(ctx, g, o.id));
       const links = new Map<string, Row>(r.linksFrom(obs.filter((o) => o.kind === 'di.consumes').map((o) => o.id)).map((l) => [l.from_obs, l]));
       return obs.map((o) => {
-        const at = loc(o._path, o._line, ctx.fresh.changed);
+        const where = at(ctx, o._path, o._line, o.id);
         if (o.kind === 'di.registers') {
           const impl = o.implementation ?? o.factory ?? o.existing ?? (o.value ? 'value' : null);
-          return { g, lines: [`registers ${shortName(o.service)}  ${o.lifetime ?? o.scope ?? ''}  impl ${typeof impl === 'string' ? shortName(impl) : impl ? 'factory' : 'self'}  ${at}`.replace(/\s{3,}/g, '  ')] };
+          return { g, lines: [`registers ${shortName(o.service)}  ${o.lifetime ?? o.scope ?? ''}  impl ${typeof impl === 'string' ? shortName(impl) : impl ? 'factory' : 'self'}  ${where}`.replace(/\s{3,}/g, '  ')] };
         }
         const l = links.get(o.id);
         const status = l ? (l.resolution === 'unresolved' ? `  unresolved: ${l.reason ?? 'no provider'}` : `  ${l.resolution}`) : '';
-        return { g, lines: [`consumes  ${shortName(o.service)} by ${shortName(o.consumer)} via ${o.via ?? '?'}  ${at}${status}`] };
+        return { g, lines: [`consumes  ${shortName(o.service)} by ${shortName(o.consumer)} via ${o.via ?? '?'}  ${where}${status}`] };
       });
     });
     return join(notes, render(ctx, items, 'DI facts', term ? `no registrations or consumers of '${term}'` : 'no DI registrations'));
@@ -328,26 +352,27 @@ const di: ToolDef = {
 const routes: ToolDef = {
   name: 'routes',
   description: 'Routes of the application: UI routes (full path, component or lazy target, guards) and HTTP endpoints (method, route template, handler), with file:line.',
-  inputSchema: schema({ prefix: { type: 'string', description: 'Only routes starting with this path (parameters may be written as :id or {id}).' }, ...paging }),
+  inputSchema: schema({ prefix: { type: 'string', description: 'Only routes starting with this path (parameters may be written as :id or {id}).' }, ...scopeArg, ...paging }),
   run(ctx) {
     const prefix = str(ctx.args.prefix);
     const want = prefix ? canonicalRoute(prefix).route : null;
     const { items, notes } = withIndex(ctx, (g) => {
       const obs = g.reader!.observations(['ui.route', 'http.endpoint']);
       return obs
+        .filter((o) => inScope(ctx, g, o.id))
         .filter((o) => {
           if (!want) return true;
           const route = o.kind === 'ui.route' ? canonicalRoute(String(o.path ?? '')).route : String(o.canonicalRoute ?? '');
           return route.startsWith(want);
         })
         .map((o) => {
-          const at = loc(o._path, o._line, ctx.fresh.changed);
+          const where = at(ctx, o._path, o._line, o.id);
           if (o.kind === 'ui.route') {
             const target = o.component ? shortName(o.component) : o.loadComponent ? `lazy ${shortName(o.loadComponent)}` : o.loadChildren ? `lazy children ${shortName(o.loadChildren)}` : o.redirectTo != null ? `redirect ${o.redirectTo}` : '(no target)';
             const guards = o.guards && Object.keys(o.guards).length ? `  guards ${Object.entries(o.guards).map(([k, v]) => `${k}: ${(Array.isArray(v) ? v : [v]).map((x) => shortName(String(x))).join(', ')}`).join('; ')}` : '';
-            return { g, lines: [`UI   ${o.path ?? `(unreached) ${o.ext?.angular?.relativePath ?? ''}`}  -> ${target}${guards}  ${at}`] };
+            return { g, lines: [`UI   ${o.path ?? `(unreached) ${o.ext?.angular?.relativePath ?? ''}`}  -> ${target}${guards}  ${where}`] };
           }
-          return { g, lines: [`HTTP ${o.method ?? '*'} ${o.routeTemplate ?? o.canonicalRoute}  -> ${shortName(o.handler)}  ${at}`] };
+          return { g, lines: [`HTTP ${o.method ?? '*'} ${o.routeTemplate ?? o.canonicalRoute}  -> ${shortName(o.handler)}  ${where}`] };
         });
     });
     return join(notes, render(ctx, items, 'routes', prefix ? `no routes under '${prefix}'` : 'no routes'));
@@ -362,7 +387,7 @@ function httpLine(o: Row): string {
 const http: ToolDef = {
   name: 'http',
   description: 'Outgoing HTTP calls found in code: method, canonical route, resolution, base address source (configuration key, never a secret), the calling method, file:line and snippet.',
-  inputSchema: schema({ route: { type: 'string', description: 'Only calls whose canonical route starts with this.' }, method: { type: 'string' }, ...paging }),
+  inputSchema: schema({ route: { type: 'string', description: 'Only calls whose canonical route starts with this.' }, method: { type: 'string' }, ...scopeArg, ...paging }),
   run(ctx) {
     const prefix = str(ctx.args.route);
     const want = prefix ? canonicalRoute(prefix) : null;
@@ -370,8 +395,8 @@ const http: ToolDef = {
     const { items, notes } = withIndex(ctx, (g) =>
       g.reader!
         .observations(['http.call'])
-        .filter((o) => (!want || String(o.canonicalRoute ?? '').startsWith(want.route)) && (!method || o.method === method))
-        .map((o) => ({ g, lines: lines(`${httpLine(o)}  ${loc(o._path, o._line, ctx.fresh.changed)}`, quote(g.reader!.snippetAt(o._path, o._line, o.context))) })),
+        .filter((o) => inScope(ctx, g, o.id) && (!want || String(o.canonicalRoute ?? '').startsWith(want.route)) && (!method || o.method === method))
+        .map((o) => ({ g, lines: lines(`${httpLine(o)}  ${at(ctx, o._path, o._line, o.id)}`, quote(g.reader!.snippetAt(o._path, o._line, o.context))) })),
     );
     return join(notes, render(ctx, items, 'HTTP calls', 'no HTTP calls'));
   },
@@ -394,13 +419,13 @@ const whoCalls: ToolDef = {
       const matched = new Set(calls.map((c) => c.id));
       for (const ep of r.observations(['http.endpoint'])) {
         if (routeMatch(String(ep.canonicalRoute ?? ''), want.route) === 'exact' && (!method || ep.method === method)) {
-          const block = [`served by ${ep.method} ${ep.routeTemplate ?? ep.canonicalRoute} -> ${shortName(ep.handler)}  ${loc(ep._path, ep._line, ctx.fresh.changed)}`];
+          const block = [`served by ${ep.method} ${ep.routeTemplate ?? ep.canonicalRoute} -> ${shortName(ep.handler)}  ${at(ctx, ep._path, ep._line, ep.id)}`];
           // Callers the engine or a federation linked to this endpoint (the `calls-to` verb), whatever their route text.
           // Calls matched by route are listed below with their callers; here only the ones linked under another route text.
           for (const l of r.linksTo([ep.id])) {
             const from = r.observation(l.from_obs);
             if (!from || matched.has(from.id)) continue;
-            block.push(`  linked caller ${l.kind} ${l.resolution}: ${from.kind} ${from.method ?? ''} ${from.canonicalRoute ?? ''} caller ${shortName(from.caller ?? from.sender)}  ${loc(from._path, from._line, ctx.fresh.changed)}`.replace(/\s{2,}(?=caller)/, ' '));
+            block.push(`  linked caller ${l.kind} ${l.resolution}: ${from.kind} ${from.method ?? ''} ${from.canonicalRoute ?? ''} caller ${shortName(from.caller ?? from.sender)}  ${at(ctx, from._path, from._line, from.id)}`.replace(/\s{2,}(?=caller)/, ' '));
           }
           out.push({ g, lines: block });
         }
@@ -408,10 +433,10 @@ const whoCalls: ToolDef = {
       const links = r.linksFrom(calls.map((c) => c.id));
       for (const c of calls) {
         const match = routeMatch(String(c.canonicalRoute), want.route);
-        const block = lines(`call ${httpLine(c)}  ${loc(c._path, c._line, ctx.fresh.changed)}${match === 'suffix' ? '  (suffix match)' : ''}`, quote(r.snippetAt(c._path, c._line, c.context)));
+        const block = lines(`call ${httpLine(c)}  ${at(ctx, c._path, c._line, c.id)}${match === 'suffix' ? '  (suffix match)' : ''}`, quote(r.snippetAt(c._path, c._line, c.context)));
         for (const l of links.filter((x) => x.from_obs === c.id)) {
           const to = l.to_obs ? r.observation(l.to_obs) : null;
-          block.push(`  link ${l.kind} ${l.resolution}${to ? ` -> ${to.method ?? ''} ${to.canonicalRoute ?? ''} ${shortName(to.handler)} ${loc(to._path, to._line, ctx.fresh.changed)}` : `: ${l.reason ?? 'no target'}`}`);
+          block.push(`  link ${l.kind} ${l.resolution}${to ? ` -> ${to.method ?? ''} ${to.canonicalRoute ?? ''} ${shortName(to.handler)} ${at(ctx, to._path, to._line, to.id)}` : `: ${l.reason ?? 'no target'}`}`);
         }
         if (c.caller && depth > 0) {
           const seen = new Set<string>([c.caller]);
@@ -420,7 +445,7 @@ const whoCalls: ToolDef = {
             const next: string[] = [];
             for (const f of frontier) {
               for (const x of edgesOf(g, f, 'callers')) {
-                block.push(`  ${'  '.repeat(d - 1)}called by ${shortName(x.from_id)}  ${loc(x.path, x.line, ctx.fresh.changed)}`);
+                block.push(`  ${'  '.repeat(d - 1)}called by ${shortName(x.from_id)}  ${at(ctx, x.path, x.line, x.id)}`);
                 if (!seen.has(x.from_id)) {
                   seen.add(x.from_id);
                   next.push(x.from_id);
@@ -435,7 +460,7 @@ const whoCalls: ToolDef = {
       return out;
     });
     const head = `who calls ${method ? method + ' ' : ''}${want.route}`;
-    return join([...notes, head], render(ctx, items, 'items', 'no HTTP call or endpoint matches this route in the loaded generation(s); a caller in another repository needs a system generation (federation)'));
+    return join([...notes, head], render(ctx, items, 'items', ctx.gens.some((g) => g.system) ? 'no HTTP call or endpoint matches this route in the system generation' : 'no HTTP call or endpoint matches this route in the loaded generation(s); a caller in another repository needs a system generation (federation)'));
   },
 };
 
@@ -450,24 +475,41 @@ function contractName(c: unknown): string {
 
 const messages: ToolDef = {
   name: 'messages',
-  description: 'Messaging: publishers and subscribers (contract, transport, destination), with file:line and the links between them; filter by contract or destination name. Empty for engines that do not observe messaging.',
+  description: 'Messaging and real time: publishers and subscribers (contract, transport, destination), SignalR pushes and client subscriptions (method), with file:line and the links between them (across repositories in a system generation); filter by contract, destination or method name.',
   inputSchema: schema({ contract: { type: 'string', description: 'Only messages whose contract or destination contains this text.' }, ...paging }),
   run(ctx) {
     const term = str(ctx.args.contract)?.toLowerCase() ?? null;
     const { items, notes } = withIndex(ctx, (g) => {
       const r = g.reader!;
-      const obs = r.observations(['messaging.publish', 'messaging.subscribe']).filter((o) => {
-        if (!term) return true;
-        return [contractName(o.contract), o.contract?.fullName, o.messageType, o.destination?.name, o.topic, o.queue].some((v) => typeof v === 'string' && v.toLowerCase().includes(term));
-      });
-      const links = r.linksFrom(obs.map((o) => o.id));
+      // Call-site arguments that name a destination (contract v1.2, C7): `SendToAll("flowUpdated", ...)` in a consumer.
+      const all = [...r.observations(['messaging.publish', 'messaging.subscribe', 'realtime.send', 'realtime.subscribe']), ...r.observations(['call.argument']).filter((o) => o.role?.kind === 'realtime.send' || o.role?.kind?.startsWith('messaging.'))];
+      const matches = (o: Row) => [contractName(o.contract), o.contract?.fullName, o.messageType, o.destination?.name, o.topic, o.queue, o.method, o.route, o.value].some((v) => typeof v === 'string' && v.toLowerCase().includes(term!));
+      const direct = new Set(all.filter((o) => !term || matches(o)).map((o) => o.id));
+      // A send whose name comes from a call-site argument matches through the subscription it is linked to.
+      const linksAll = r.linksFrom(all.map((o) => o.id));
+      for (const l of linksAll) if (term && l.to_obs && direct.has(l.to_obs)) direct.add(l.from_obs);
+      const obs = all.filter((o) => direct.has(o.id));
+      const links = linksAll.filter((l) => direct.has(l.from_obs));
       return obs.map((o) => {
+        if (o.kind === 'call.argument') {
+          return { g, lines: [`argument ${JSON.stringify(o.value ?? null)} for ${o.role?.kind ?? '?'} ${o.role?.field ?? o.parameter}  in call to ${shortName(o.callee)}  by ${shortName(o.caller)}  ${at(ctx, o._path, o._line, o.id)}`] };
+        }
+        if (o.kind.startsWith('realtime.')) {
+          const who = o.kind === 'realtime.send' ? o.sender : o.subscriber ?? o.handler ?? o.consumer ?? o.client;
+          const name = o.method ?? (o.destinationParameter ? `(method from call-site argument '${o.destinationParameter.parameter}')` : '?');
+          const block = [`${o.kind === 'realtime.send' ? 'push     ' : 'listen   '} ${name}  realtime ${o.route ?? (typeof o.hub === 'string' ? shortName(o.hub) : '')}${o.audience ? `  audience ${o.audience}` : ''}  by ${shortName(who)}  ${at(ctx, o._path, o._line, o.id)}`.replace(/\s{3,}/g, '  ')];
+          for (const l of links.filter((x) => x.from_obs === o.id)) {
+            const to = l.to_obs ? r.observation(l.to_obs) : null;
+            block.push(`  link ${l.kind} ${l.resolution}${to ? ` -> ${to.kind} ${to.method ?? ''} by ${shortName(to.subscriber ?? to.handler ?? to.client ?? to.caller)} ${at(ctx, to._path, to._line, to.id)}` : ''}${l.reason ? `: ${l.reason}` : ''}`);
+          }
+          return { g, lines: block };
+        }
         const dest = o.destination ? `${o.destination.kind ?? 'destination'} ${o.destination.name ?? '?'}${o.destination.nameSource ? ` (${o.destination.nameSource})` : ''}` : 'destination unknown';
         const who = o.kind === 'messaging.publish' ? o.publisher ?? o.sender : o.handler ?? o.consumer ?? o.subscriber;
-        const block = [`${o.kind === 'messaging.publish' ? 'publish  ' : 'subscribe'} ${contractName(o.contract ?? o.messageType)}  ${o.transport ?? (o.transports ? o.transports.join('|') : '')}  ${dest}  by ${shortName(who)}  ${loc(o._path, o._line, ctx.fresh.changed)}`.replace(/\s{3,}/g, '  ')];
+        const block = [`${o.kind === 'messaging.publish' ? 'publish  ' : 'subscribe'} ${contractName(o.contract ?? o.messageType)}  ${o.transport ?? (o.transports ? o.transports.join('|') : '')}  ${dest}  by ${shortName(who)}  ${at(ctx, o._path, o._line, o.id)}`.replace(/\s{3,}/g, '  ')];
         for (const l of links.filter((x) => x.from_obs === o.id)) {
           const to = l.to_obs ? r.observation(l.to_obs) : null;
-          block.push(`  link ${l.kind} ${l.resolution}${to ? ` -> ${to.kind} by ${shortName(to.handler ?? to.consumer ?? to.subscriber)} ${loc(to._path, to._line, ctx.fresh.changed)}` : `: ${l.reason ?? 'no target'}`}`);
+          block.push(`  link ${l.kind} ${l.resolution}${to ? ` -> ${to.kind} by ${shortName(to.handler ?? to.consumer ?? to.subscriber)} ${at(ctx, to._path, to._line, to.id)}` : `: ${l.reason ?? 'no target'}`}`);
         }
         return { g, lines: block };
       });
@@ -485,7 +527,7 @@ function nodeName(g: Loaded, node: string): string {
     : o.contract ? contractName(o.contract)
     : o.request ? shortName(o.request)
     : o.service && typeof o.service === 'string' ? shortName(o.service)
-    : o.route ?? o.key ?? o.name ?? '';
+    : o.method ?? (o.destinationParameter ? `(method from call-site argument '${o.destinationParameter.parameter}')` : null) ?? o.route ?? o.key ?? o.name ?? '';
   return `${o.kind} ${what}`.trim();
 }
 
@@ -509,7 +551,7 @@ const trace: ToolDef = {
       }
       const tracer = new Tracer(g.reader);
       const resolveEntity = (t: string): string | null => {
-        const m = g.reader!.resolveSymbol(t);
+        const m = g.reader!.resolveSymbol(t, g.system?.mine ?? []);
         if ('entity' in m) return m.entity.id;
         messages.push(`${tag}${'candidates' in m ? `'${t}' is ambiguous; pass one of: ${m.candidates.slice(0, 5).map((c) => c.id).join(', ')}` : m.none}`);
         return null;
@@ -527,7 +569,7 @@ const trace: ToolDef = {
       }
       for (const p of tracer.trace(start, target, depth)) {
         const lines = [`${nodeName(g, p.to)}  (${p.steps.length} step(s), weakest link: step ${p.weakest.step}, ${p.weakest.resolution})`];
-        p.steps.forEach((s, i) => lines.push(`  ${i + 1}. ${s.kind} ${s.resolution}  ${nodeName(g, s.to)}  ${loc(s.path, s.line, ctx.fresh.changed)}`));
+        p.steps.forEach((s, i) => lines.push(`  ${i + 1}. ${s.kind} ${s.resolution}  ${nodeName(g, s.to)}  ${at(ctx, s.path, s.line, s.via)}`));
         items.push({ g, lines });
       }
       messages.push(`${tag}trace from ${nodeName(g, start)}${to ? ` to ${to}` : ' to service-side observations'}, depth ${depth}`);
@@ -579,10 +621,17 @@ const context: ToolDef = {
 export const TOOLS: ToolDef[] = [generationInfo, search, symbol, refs, callGraph('callers'), callGraph('callees'), implementations, di, routes, http, whoCalls, messages, trace, context];
 
 /** Runs a tool against a resolution: freshness header first, then the tool's answer. */
+const CROSS_REPOSITORY = new Set(['who_calls', 'trace', 'messages']);
+
 export function runTool(tool: ToolDef, res: Resolution, args: Record<string, unknown>): { text: string; isError: boolean } {
   const fresh = freshness(res);
   const filter = str(args.generation);
-  const gens = filter ? res.loaded.filter((g) => g.label === filter || g.label.startsWith(filter) || g.manifest.engine?.name === filter) : res.loaded;
+  // Cross-repository tools answer from a system generation when one is loaded; the others from the generations that
+  // answer for this repository (a secondary system only when asked for by name).
+  const systems = res.loaded.filter((g) => g.system);
+  const gens = filter
+    ? res.loaded.filter((g) => g.label === filter || g.label.startsWith(filter) || g.manifest.engine?.name === filter)
+    : CROSS_REPOSITORY.has(tool.name) && systems.length ? systems : res.loaded.filter((g) => !g.system?.secondary);
   if (gens.length === 0) return { text: `${fresh.header}\nno loaded generation matches '${filter}'; loaded: ${res.loaded.map((g) => g.label).join(', ')}`, isError: true };
   return { text: `${fresh.header}\n${tool.run({ res, fresh, gens, args })}`, isError: false };
 }

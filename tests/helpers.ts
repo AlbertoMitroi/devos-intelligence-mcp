@@ -219,3 +219,17 @@ export function write(path: string, data: string | Buffer): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, data);
 }
+
+/** A system generation without index: manifest, verified `inputs.ndjson` and one context card (selection tests). */
+export function writeSystem(dir: string, name: string, inputs: { id: string; remote: string | null; commit: string }[]): string {
+  mkdirSync(join(dir, 'context'), { recursive: true });
+  writeFileSync(join(dir, 'inputs.ndjson'), inputs.map((i) => JSON.stringify({ commit: i.commit, engine: { name: 'angular-intelligence', version: '0.1.0' }, id: i.id, included: true, recordType: 'input', repository: { remoteUrl: i.remote } })).join('\n') + '\n');
+  writeFileSync(join(dir, 'context/overview.md'), `# System ${name}\n`);
+  const files = ['inputs.ndjson', 'context/overview.md'].map((p) => {
+    const b = readFileSync(join(dir, p));
+    return { path: p, sha256: createHash('sha256').update(b).digest('hex'), size: b.length };
+  });
+  const commit = `system:${createHash('sha256').update(JSON.stringify(inputs)).digest('hex')}`;
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ schemaVersion: '1.2', generationType: 'system', system: name, systemFormat: '1.0', commit, status: 'complete', engine: { name: 'intelligence-federation', version: '0.1.0' }, repository: { remoteUrl: null }, requiredCapabilities: [], files }));
+  return dir;
+}

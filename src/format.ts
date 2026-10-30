@@ -40,8 +40,14 @@ export function pageFooter(p: { total: number; offset: number; items: unknown[];
  * a module (empty symbol path) gives `module src/app/x/leases.service`;
  * package symbols keep the package: `@angular/common HttpClient.post(...)`.
  */
+/** The input a system-generation record belongs to: the `{input}/` prefix of its id (contract v1.2, system generation). */
+export function inputOf(id: string | null | undefined): string | null {
+  return id ? (/^([\w.-]+)\/(?=[a-z]+:)/.exec(id)?.[1] ?? null) : null;
+}
+
 export function shortName(id: string | null | undefined): string {
   if (!id) return '(none)';
+  if (inputOf(id)) id = id.slice(inputOf(id)!.length + 1);
   const ts = /^ts:(?:pkg:(.+?)@[^:]+:|[^:]*:)([^#]*)#(.*)$/.exec(id);
   if (ts) {
     const name = ts[3] || `module ${ts[2]}`;

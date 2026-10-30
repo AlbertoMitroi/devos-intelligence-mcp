@@ -9,6 +9,8 @@ export interface Config {
   generationRoots: string[];
   cacheDir: string;
   maxAncestors: number;
+  /** System generations: `auto` (any found whose inputs include this repository), `off`, or one folder. */
+  system: string;
   oci: {
     enabled: boolean;
     /** `ghcr.io/{owner}/context-{repo}`; an `http://` prefix means a plain-HTTP registry (tests). */
@@ -30,6 +32,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     generationRoots: roots,
     cacheDir: env.DEVOS_MCP_CACHE || join(env.XDG_CACHE_HOME || join(home, '.cache'), 'devos-intelligence-mcp'),
     maxAncestors: int(env.DEVOS_MCP_MAX_ANCESTORS, 50),
+    system: env.DEVOS_MCP_SYSTEM || 'auto',
     oci: {
       enabled: (env.DEVOS_MCP_OCI ?? 'on') !== 'off',
       reference: env.DEVOS_MCP_OCI_REFERENCE || 'ghcr.io/{owner}/context-{repo}',

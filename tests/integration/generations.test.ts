@@ -14,7 +14,8 @@ import { execFileSync } from 'node:child_process';
 import { INDEX_SQL } from '../../src/generation/index-schema.ts';
 import { tmp } from '../helpers.ts';
 
-const cfg = () => loadConfig({ HOME: tmp('mcp-it-home-'), DEVOS_MCP_GENERATIONS: GENERATIONS, DEVOS_MCP_OCI: 'off' });
+// Per-repository generations: system generations (tests/integration/system.test.ts) would answer instead.
+const cfg = () => loadConfig({ HOME: tmp('mcp-it-home-'), DEVOS_MCP_GENERATIONS: GENERATIONS, DEVOS_MCP_OCI: 'off', DEVOS_MCP_SYSTEM: 'off' });
 
 async function resolveAt(dir: string): Promise<Resolution> {
   const res = await new Resolver(cfg()).resolve(dir);
@@ -94,7 +95,7 @@ test('eShopOnAbp: two generations of one commit, both engines', { skip: skipUnle
 
 test('every lab and reference generation verifies', { skip: skipUnless(GENERATIONS) }, async () => {
   const { verifyGeneration } = await import('../../src/generation/verify.ts');
-  const names = ['eshop-dotnet', 'eshoponabp-angular', 'eshoponabp-dotnet', 'lab-core-dotnet', 'lab-intake-dotnet', 'lab-leasing-dotnet', 'lab-pricing-dotnet', 'lab-web-angular'];
+  const names = ['eshop-dotnet', 'eshoponabp-angular', 'eshoponabp-dotnet', 'lab-core-dotnet', 'lab-intake-dotnet', 'lab-leasing-dotnet', 'lab-pricing-dotnet', 'lab-web-angular', 'lab-system', 'eshoponabp-system'];
   for (const n of names) {
     const v = await verifyGeneration(join(GENERATIONS, n));
     assert.ok(v.ok, `${n}: ${v.errors.join('; ')}`);

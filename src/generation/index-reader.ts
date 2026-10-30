@@ -64,7 +64,16 @@ export class IndexReader {
    * A symbol is an entity id, an exact name, or a qualified tail (`LeasesService.search`, `Controllers.LeasesController`).
    * Source entities are preferred over package or metadata ones when a name matches both.
    */
-  resolveSymbol(term: string): SymbolMatch {
+  resolveSymbol(term: string, preferInputs: string[] = []): SymbolMatch {
+    const m = this.resolveAnywhere(term);
+    // In a system generation, the repository's own inputs win over the others when the name exists there.
+    if (preferInputs.length === 0 || !('candidates' in m)) return m;
+    const mine = m.candidates.filter((c) => preferInputs.some((i) => String(c.id).startsWith(`${i}/`)));
+    if (mine.length === 1) return { entity: mine[0] };
+    return m;
+  }
+
+  resolveAnywhere(term: string): SymbolMatch {
     const t = term.trim();
     if (!t) return { none: 'empty symbol' };
     const byId = this.one('select * from entities where id = ?', t);
@@ -212,6 +221,21 @@ export class IndexReader {
       if (r) return r;
     }
     return this.one('select path, line from evidence where text = ? order by path, line limit 1', text);
+  }
+
+  /**
+   * A package symbol in a system generation: the source entity that implements it and how the consumed version relates
+   * to the produced one (`packages.version_match`: exact, different, unknown).
+   */
+  packageImplementation(entity: string): { source: string; versionMatch: string | null; consumed: string | null; produced: string | null; resolution: string } | null {
+    if (!this.tables.has('packages')) return null;
+    const l = this.one("select to_obs, resolution from links where kind = 'implemented_by_package' and from_obs = ? limit 1", entity);
+    if (!l?.to_obs) return null;
+    const m = /(?:^|\/)(?:dotnet|ts):pkg:(.+?)@([^:]+):/.exec(entity);
+    const consumer = /^([\w.-]+)\//.exec(entity)?.[1] ?? null;
+    const p = m ? this.one('select version_match, json from packages where package_id = ? and version = ? and consumer = ? limit 1', m[1], m[2], consumer) : undefined;
+    const produced = p ? (JSON.parse(p.json).producer?.packageVersion ?? null) : null;
+    return { source: l.to_obs, versionMatch: p?.version_match ?? null, consumed: m?.[2] ?? null, produced, resolution: l.resolution };
   }
 
   observation(id: string): Row | undefined {

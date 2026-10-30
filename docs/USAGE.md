@@ -63,6 +63,7 @@ All optional; the defaults work on the owner's machine.
 | `DEVOS_MCP_WORKSPACE` | client root, else the working directory | repository the answers are for |
 | `DEVOS_MCP_GENERATIONS` | `~/repos/devos/_generations` when it exists | colon-separated folders: a generation, or a folder of generations (one level) |
 | `DEVOS_MCP_CACHE` | `~/.cache/devos-intelligence-mcp` | pulled generations, `generations/<reference>/<commit>/<label>/` |
+| `DEVOS_MCP_SYSTEM` | `auto` | system generations: `auto` (any whose inputs include this repository), `off`, or one folder |
 | `DEVOS_MCP_MAX_ANCESTORS` | `50` | first-parent ancestors of HEAD to try before the `main-<engine>` tags |
 | `DEVOS_MCP_OCI` | `on` | `off` disables the registry (cache and local folders still work) |
 | `DEVOS_MCP_OCI_REFERENCE` | `ghcr.io/{owner}/context-{repo}` | repository of the artifacts; `{owner}` and `{repo}` come from the `origin` remote; an `http://` prefix means a plain-HTTP registry |
@@ -123,3 +124,5 @@ The first line says which generation answered:
 - `generation lab-web-angular (...) at e21eef1712b2, exact match for HEAD`: the generation is for HEAD.
 - `WARNING generation ... is for e21eef1712b2, the nearest analyzed ancestor of HEAD 24e450a1d700 (2 commit(s) behind); 1 file(s) changed since, evidence in them is marked [changed]`: an older commit answered; lines in changed files may have moved.
 - `..., exact match for HEAD; WARNING working tree has 3 uncommitted change(s)`: uncommitted edits, marked the same way.
+- `generation system:lab (...; inputs core, intake, leasing, pricing, web; this repository is input web, the others at their analyzed commits) ...`: a federation system generation answers. Every location says its repository, `[leasing] src/Leasing.Host/...:33`. `who_calls`, `trace` and `messages` cross repositories; `search`, `routes`, `http` and `di` stay on this repository unless called with `scope: "system"`.
+- `...; cross-repository answers (who_calls, trace, messages) from system:lab (...) at 66264d596794, 2 commit(s) behind HEAD`: a newer per-repository generation answers; the system answers the cross-repository tools.

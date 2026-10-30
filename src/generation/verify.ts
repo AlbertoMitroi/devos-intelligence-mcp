@@ -14,6 +14,8 @@ export interface Manifest {
   requiredCapabilities?: string[];
   files?: { path: string; sha256: string; size: number }[];
   coverage?: { summary?: Record<string, number> };
+  generationType?: string;
+  system?: string;
   [k: string]: unknown;
 }
 
@@ -67,7 +69,9 @@ export async function verifyGeneration(dir: string): Promise<Verification> {
   if (!manifest) return { ok: false, errors: [error ?? 'no manifest'], notes, manifest: null, manifestSha256: null };
   const major = /^(\d+)\./.exec(String(manifest.schemaVersion ?? ''))?.[1];
   if (major !== '1') errors.push(`schemaVersion '${manifest.schemaVersion}' is not major 1`);
-  if (typeof manifest.commit !== 'string' || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(manifest.commit)) errors.push('commit is missing or not a full object id');
+  // A system generation's commit is `system:{sha256}` over its inputs (contract v1.2, system generation).
+  const commitPattern = manifest.generationType === 'system' ? /^system:[0-9a-f]{64}$/ : /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+  if (typeof manifest.commit !== 'string' || !commitPattern.test(manifest.commit)) errors.push('commit is missing or not a full object id');
   const unknown = (manifest.requiredCapabilities ?? []).filter((c) => !KNOWN_CAPABILITIES.has(c));
   if (unknown.length) errors.push(`unknown required capabilities: ${unknown.join(', ')}`);
   if (!Array.isArray(manifest.files)) errors.push('manifest lists no files');

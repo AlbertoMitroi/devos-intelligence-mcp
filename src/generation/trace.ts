@@ -10,6 +10,8 @@ export interface Step {
   resolution: string;
   path: string | null;
   line: number | null;
+  /** The record the step comes from (relation, observation or entity id); in a system generation it names the input. */
+  via: string;
 }
 
 export interface TracePath {
@@ -57,23 +59,31 @@ export class Tracer {
       for (const l of this.r.linksFrom([node])) {
         if (!l.to_obs) continue;
         const to = this.r.observation(l.to_obs);
-        out.push({ to: l.to_obs, kind: `link.${l.kind}`, resolution: l.resolution, path: to?._path ?? null, line: to?._line ?? null });
+        out.push({ to: l.to_obs, kind: `link.${l.kind}`, resolution: l.resolution, path: to?._path ?? null, line: to?._line ?? null, via: l.to_obs });
       }
       const o = this.r.observation(node);
       for (const f of TARGET_FIELDS) {
         const entity = o?.[f];
         if (typeof entity === 'string' && this.r.entity(entity)) {
           const d = this.r.firstDeclaration(entity);
-          out.push({ to: entity, kind: `${o!.kind}.${f}`, resolution: 'exact', path: d?.path ?? null, line: d?.line ?? null });
+          out.push({ to: entity, kind: `${o!.kind}.${f}`, resolution: 'exact', path: d?.path ?? null, line: d?.line ?? null, via: entity });
         }
       }
       return out;
     }
     for (const x of [...this.r.relations(['calls_declared_target', 'possible_runtime_target'], 'from', node), ...this.r.relations(['references'], 'from', node, 'invocation')]) {
-      out.push({ to: x.to_id, kind: x.kind === 'references' ? 'invocation' : x.kind, resolution: x.resolution ?? 'exact', path: x.path, line: x.line });
+      out.push({ to: x.to_id, kind: x.kind === 'references' ? 'invocation' : x.kind, resolution: x.resolution ?? 'exact', path: x.path, line: x.line, via: x.id });
     }
-    for (const x of this.r.relations(['contains'], 'from', node)) out.push({ to: x.to_id, kind: 'contains', resolution: 'exact', path: x.path, line: x.line });
-    for (const o of this.observationsMadeIn(node)) out.push({ to: o.id, kind: o.kind, resolution: o.resolution ?? 'exact', path: o._path, line: o._line });
+    for (const x of this.r.relations(['contains'], 'from', node)) out.push({ to: x.to_id, kind: 'contains', resolution: 'exact', path: x.path, line: x.line, via: x.id });
+    for (const o of this.observationsMadeIn(node)) out.push({ to: o.id, kind: o.kind, resolution: o.resolution ?? 'exact', path: o._path, line: o._line, via: o.id });
+    // An interface or abstract member runs as its implementations: a candidate step (dispatch is decided at run time).
+    // Needed where no possible_runtime_target edge exists, such as a call through a package into another repository.
+    for (const x of this.r.relations(['implements', 'overrides'], 'to', node)) out.push({ to: x.from_id, kind: `implemented_by.${x.kind}`, resolution: 'candidate', path: x.path, line: x.line, via: x.id });
+    // A package symbol is implemented by its source in the producing repository (system generations).
+    for (const l of this.r.linksFrom([node]).filter((x) => x.kind === 'implemented_by_package' && x.to_obs)) {
+      const d = this.r.firstDeclaration(l.to_obs);
+      out.push({ to: l.to_obs, kind: 'link.implemented_by_package', resolution: l.resolution, path: d?.path ?? null, line: d?.line ?? null, via: l.to_obs });
+    }
     const seen = new Set<string>();
     return out.filter((s) => (seen.has(s.to) ? false : (seen.add(s.to), true)));
   }

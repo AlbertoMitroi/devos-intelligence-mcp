@@ -3,7 +3,7 @@
 import { join } from 'node:path';
 import type { Config } from '../config.ts';
 import { candidates, changedSince, distanceTo, isAncestor, readWorkspace, type Workspace } from './git.ts';
-import { FolderSource, type GenerationSource, type Hit, type SourceKind } from './sources.ts';
+import { FolderSource, readSystemInputs, type GenerationSource, type Hit, type SourceKind, type SystemInput } from './sources.ts';
 import { OciSource } from './oci.ts';
 import { verifyGeneration, type Manifest } from '../generation/verify.ts';
 import { IndexReader } from '../generation/index-reader.ts';
@@ -18,6 +18,18 @@ export interface Loaded {
   notes: string[];
   reader: IndexReader | null;
   readerError: string | null;
+  /** A system generation: its inputs, the input that is this repository, and how it is used. */
+  system?: {
+    name: string;
+    /** The inputs that are this repository (one per engine). */
+    mine: string[];
+    inputs: SystemInput[];
+    /** Its input commit for this repository and that commit's distance from HEAD. */
+    commit: string;
+    distance: number;
+    /** true: a nearer per-repository generation answers repository questions; the system answers cross-repository ones. */
+    secondary: boolean;
+  };
 }
 
 export interface Resolution {
@@ -77,8 +89,8 @@ export class Resolver {
     this.cfg = cfg;
     this.oci = new OciSource(cfg, env);
     this.sources = sources ?? [
-      new FolderSource('local', cfg.generationRoots, 1),
-      new FolderSource('cache', [join(cfg.cacheDir, 'generations')], 3),
+      new FolderSource('local', cfg.generationRoots, 1, cfg.system),
+      new FolderSource('cache', [join(cfg.cacheDir, 'generations')], 3, cfg.system),
       this.oci,
     ];
   }
@@ -99,26 +111,57 @@ export class Resolver {
     const commits = candidates(ws.root, this.cfg.maxAncestors);
     const results = await Promise.all(this.sources.map((s) => s.find(ws, commits)));
     const res: Resolution = { workspace: ws, commit: null, distance: null, loaded: [], sources: results.map((r) => r.summary), skipped: [], errors: results.flatMap((r) => (r.error ? [r.error] : [])) };
+    const all = results.flatMap((r) => r.hits);
+    await this.choosePrimary(all.filter((h) => !h.system), commits, res);
+    await this.chooseSystem(all.filter((h) => h.system), commits, res);
+    if (res.loaded.length === 0) await this.mainFallback(ws, res);
+    return res;
+  }
+
+  /** Per-repository generations: the nearest commit; at that commit the best source kind with a valid generation. */
+  async choosePrimary(hits: Hit[], commits: string[], res: Resolution): Promise<void> {
     const byCommit = new Map<string, Hit[]>();
-    for (const h of results.flatMap((r) => r.hits)) byCommit.set(h.commit, [...(byCommit.get(h.commit) ?? []), h]);
+    for (const h of hits) byCommit.set(h.commit, [...(byCommit.get(h.commit) ?? []), h]);
     for (const [distance, commit] of commits.entries()) {
-      const hits = (byCommit.get(commit) ?? []).sort((a, b) => ORDER[a.source] - ORDER[b.source]);
-      if (hits.length === 0) continue;
+      const at = byCommit.get(commit) ?? [];
       // The best source kind that yields at least one valid generation for this commit wins; others are not mixed in.
       for (const kind of ['local', 'cache', 'oci'] as SourceKind[]) {
-        const group = hits.filter((h) => h.source === kind);
+        const group = at.filter((h) => h.source === kind);
         if (group.length === 0) continue;
         const loaded = await this.materialize(group, res);
         if (loaded.length > 0) {
           res.commit = commit;
           res.distance = distance;
           res.loaded = loaded;
-          return res;
+          return;
         }
       }
     }
-    await this.mainFallback(ws, res);
-    return res;
+  }
+
+  /**
+   * The nearest system generation whose input is this repository (decision M9). At the same distance as the
+   * per-repository generation, or nearer, it replaces it (it holds the same input plus the others); farther, it is
+   * kept as a secondary generation for cross-repository answers only.
+   */
+  async chooseSystem(hits: Hit[], commits: string[], res: Resolution): Promise<void> {
+    const ordered = hits
+      .map((h) => ({ h, distance: commits.indexOf(h.commit) }))
+      .filter((x) => x.distance >= 0)
+      .sort((a, b) => a.distance - b.distance || ORDER[a.h.source] - ORDER[b.h.source] || a.h.origin.localeCompare(b.h.origin));
+    for (const { h, distance } of ordered) {
+      const [loaded] = await this.materialize([h], res);
+      if (!loaded) continue;
+      const secondary = res.distance != null && distance > res.distance;
+      loaded.system = { name: h.system!.name, mine: h.system!.inputs, inputs: readSystemInputs(loaded.dir), commit: h.commit, distance, secondary };
+      if (secondary) res.loaded.push(loaded);
+      else {
+        res.commit = h.commit;
+        res.distance = distance;
+        res.loaded = [loaded];
+      }
+      return;
+    }
   }
 
   async materialize(group: Hit[], res: Resolution): Promise<Loaded[]> {
@@ -176,12 +219,19 @@ export interface Freshness {
   dirty: boolean;
   /** One line every answer starts with. */
   header: string;
+  /** In a system generation, the inputs that are this repository: only their paths can be [changed]. */
+  inputs: string[];
 }
 
 export function freshness(res: Resolution): Freshness {
   const ws = res.workspace;
   const head = ws.head.slice(0, 12);
-  const gens = res.loaded.map((l) => `${l.label} (${l.manifest.engine?.name ?? 'engine?'} ${l.manifest.engine?.version ?? ''}, contract ${l.manifest.schemaVersion}${l.manifest.status && l.manifest.status !== 'complete' ? `, status ${l.manifest.status}` : ''})`.replace(' ,', ',')).join(' + ');
+  const describe = (l: Loaded) => {
+    const sys = l.system ? `; inputs ${l.system.inputs.filter((i) => i.included).map((i) => i.id).join(', ')}; this repository is input ${l.system.mine.join(' and ')}, the others at their analyzed commits` : '';
+    return `${l.label} (${l.manifest.engine?.name ?? 'engine?'} ${l.manifest.engine?.version ?? ''}, contract ${l.manifest.schemaVersion}${l.manifest.status && l.manifest.status !== 'complete' ? `, status ${l.manifest.status}` : ''}${sys})`.replace(' ,', ',');
+  };
+  const gens = res.loaded.filter((l) => !l.system?.secondary).map(describe).join(' + ');
+  const secondary = res.loaded.find((l) => l.system?.secondary);
   const commit = res.commit!;
   const ch = changedSince(ws.root, commit);
   const exact = commit === ws.head;
@@ -193,5 +243,6 @@ export function freshness(res: Resolution): Freshness {
     const dist = `${res.distance} commit(s) behind${res.viaMain ? ', found through the main tag' : ''}`;
     header = `WARNING generation ${gens} is for ${commit.slice(0, 12)}, the nearest analyzed ancestor of HEAD ${head} (${dist}); ${ch.known ? `${ch.files.size} file(s) changed since, evidence in them is marked [changed]` : 'files changed since are unknown (commit not in the local history)'}`;
   }
-  return { exact, changed: ch.files, dirty: ch.dirty, header };
+  if (secondary) header += `; cross-repository answers (who_calls, trace, messages) from ${describe(secondary)} at ${secondary.system!.commit.slice(0, 12)}, ${secondary.system!.distance} commit(s) behind HEAD`;
+  return { exact, changed: ch.files, dirty: ch.dirty, header, inputs: res.loaded.find((l) => l.system && !l.system.secondary)?.system?.mine ?? [] };
 }
