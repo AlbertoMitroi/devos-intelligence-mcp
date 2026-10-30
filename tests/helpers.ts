@@ -51,6 +51,9 @@ export interface GenOptions {
   extraRefs?: number;
   requiredCapabilities?: string[];
   schemaVersion?: string;
+  /** Adds the .NET index additions: relation_evidence (two usages on one relation), indexSchema, observation search, messaging, a runtime target. */
+  dotnetExtras?: boolean;
+  status?: string;
 }
 
 export function writeGeneration(dir: string, o: GenOptions): string {
@@ -123,6 +126,23 @@ export function writeGeneration(dir: string, o: GenOptions): string {
     obs('obs:con1', 'di.consumes', 'src/app/order-list.ts', 7, { service: IDS.service, consumer: IDS.list, via: 'inject' });
     obs('obs:con2', 'di.consumes', 'src/app/order-list.ts', 8, { service: IDS.repo, consumer: IDS.list, via: 'constructor' });
     ins('links', 'lnk:1', 'configured_route', 'http', 'obs:call1', 'obs:ep1', 'exact', null);
+    if (o.dotnetExtras) {
+      db.exec(`create table relation_evidence(relation text, evidence text, primary key (relation, evidence));
+        create table observation_evidence(observation text, evidence text, primary key (observation, evidence));
+        create table link_evidence(link text, evidence text, primary key (link, evidence));
+        create table evidence_snippet(evidence text primary key, snippet text);`);
+      ins('meta', 'indexSchema', '1');
+      // rel:6 is OrderList -> OrdersService (read); two usages of it.
+      evidence('src/app/order-list.ts', 7, 'private readonly orders = inject(OrdersService);');
+      evidence('src/app/order-list.ts', 21, 'OrdersService.cacheKey');
+      ins('relation_evidence', 'rel:6', `ev:${ev - 1}`);
+      ins('relation_evidence', 'rel:6', `ev:${ev}`);
+      relation('possible_runtime_target', IDS.listInit, IDS.sqlRepo, null, 'src/app/order-list.ts', 12);
+      obs('obs:pub1', 'messaging.publish', 'src/app/orders.service.ts', 20, { contract: 'ts:.:src/app/events#OrderPlaced', publisher: IDS.load, transport: 'kafka', destination: { kind: 'topic', name: 'orders.placed', nameSource: 'configuration' } });
+      obs('obs:sub1', 'messaging.subscribe', 'src/app/archive.service.ts', 5, { contract: 'ts:.:src/app/events#OrderPlaced', handler: IDS.other, transport: 'kafka', destination: { kind: 'topic', name: 'orders.placed', nameSource: 'literal' } });
+      ins('links', 'lnk:4', 'consumes_contract', 'messaging', 'obs:pub1', 'obs:sub1', 'exact', null);
+      ins('search', 'obs:ep1', 'observation', 'http.endpoint GET /v1/orders OrdersController.List');
+    }
     ins('links', 'lnk:2', 'consumes_contract', 'di', 'obs:con1', 'obs:reg1', 'exact', null);
     ins('links', 'lnk:3', 'consumes_contract', 'di', 'obs:con2', null, 'unresolved', 'no provider of this token was found in the analysed code');
     db.close();
@@ -131,7 +151,7 @@ export function writeGeneration(dir: string, o: GenOptions): string {
   const manifest = {
     schemaVersion: o.schemaVersion ?? '1.1',
     commit: o.commit,
-    status: 'complete',
+    status: o.status ?? 'complete',
     engine: { name: (o.engine ?? 'angular-intelligence@0.1.0').split('@')[0], version: '0.1.0' },
     repository: { remoteUrl: o.remoteUrl === undefined ? 'https://github.com/Example/shop.git' : o.remoteUrl },
     requiredCapabilities: o.requiredCapabilities ?? [],

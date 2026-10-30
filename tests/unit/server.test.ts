@@ -59,7 +59,7 @@ test('stdio: initialize, tools/list, tools/call, errors; workspace from client r
   assert.equal(server.workspaceDir(), dir);
 
   const list = await h.request(2, 'tools/list');
-  assert.equal(list.result.tools.length, 12);
+  assert.equal(list.result.tools.length, 13);
   assert.ok(list.result.tools.every((t: any) => t.inputSchema.type === 'object' && t.description.length > 20));
 
   const call = await h.request(3, 'tools/call', { name: 'routes', arguments: {} });

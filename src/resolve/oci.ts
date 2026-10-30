@@ -10,6 +10,7 @@ import type { Config } from '../config.ts';
 import type { Workspace } from './git.ts';
 import { CACHE_MARKER, type GenerationSource, type Hit, type SourceResult } from './sources.ts';
 import { extractTo, readTar } from './tar.ts';
+import { credentialCandidates, type Credentials } from './credentials.ts';
 import { verifyGeneration } from '../generation/verify.ts';
 
 export const ARTIFACT_TYPE = 'application/vnd.devos.intelligence.generation.v1';
@@ -60,17 +61,19 @@ export function parseReference(template: string, ws: Pick<Workspace, 'slug'>): {
 export class Registry {
   base: string;
   name: string;
-  user: string | null;
-  token: string | null;
   timeoutMs: number;
+  /** Credential sources not tried yet; looked up only when an anonymous token is refused. */
+  credentials: (() => Credentials | null)[];
   bearer: string | null = null;
+  challenge: string | null = null;
+  /** Where the accepted credentials came from (`env`, `gh`, ...), or null for anonymous. Never the value. */
+  credentialSource: string | null = null;
 
-  constructor(base: string, name: string, opts: { user: string | null; token: string | null; timeoutMs: number }) {
+  constructor(base: string, name: string, opts: { timeoutMs: number; credentials?: (() => Credentials | null)[] }) {
     this.base = base;
     this.name = name;
-    this.user = opts.user;
-    this.token = opts.token;
     this.timeoutMs = opts.timeoutMs;
+    this.credentials = [...(opts.credentials ?? [])];
   }
 
   async request(path: string, accept?: string): Promise<Response> {
@@ -83,13 +86,27 @@ export class Registry {
     };
     let res = await go();
     if (res.status === 401 && !this.bearer) {
-      await this.authenticate(res.headers.get('www-authenticate'));
+      this.challenge = res.headers.get('www-authenticate');
+      await this.authenticate(null).catch(() => undefined);
       res = await go();
+    }
+    // Private packages refuse the anonymous token: try the configured credentials, one source at a time.
+    while ((res.status === 401 || res.status === 403) && this.challenge && this.credentials.length) {
+      const creds = this.credentials.shift()!();
+      if (!creds) continue;
+      try {
+        await this.authenticate(creds);
+      } catch {
+        continue;
+      }
+      res = await go();
+      if (res.ok || res.status === 404) this.credentialSource = creds.source;
     }
     return res;
   }
 
-  async authenticate(challenge: string | null): Promise<void> {
+  async authenticate(creds: Credentials | null): Promise<void> {
+    const challenge = this.challenge;
     if (!challenge || !/^bearer\s/i.test(challenge)) throw new Error(`registry asks for unsupported authentication: ${challenge ?? '(none)'}`);
     const params = Object.fromEntries([...challenge.matchAll(/(\w+)="([^"]*)"/g)].map((m) => [m[1].toLowerCase(), m[2]]));
     if (!params.realm) throw new Error('registry challenge without realm');
@@ -97,7 +114,7 @@ export class Registry {
     if (params.service) u.searchParams.set('service', params.service);
     u.searchParams.set('scope', params.scope ?? `repository:${this.name}:pull`);
     const headers: Record<string, string> = {};
-    if (this.token) headers.authorization = `Basic ${Buffer.from(`${this.user ?? 'token'}:${this.token}`).toString('base64')}`;
+    if (creds) headers.authorization = `Basic ${Buffer.from(`${creds.user}:${creds.secret}`).toString('base64')}`;
     const res = await fetch(u, { headers, signal: AbortSignal.timeout(this.timeoutMs) });
     if (!res.ok) throw new Error(`token request failed: HTTP ${res.status}`);
     const body = (await res.json()) as { token?: string; access_token?: string };
@@ -212,16 +229,18 @@ export async function pull(reg: Registry, display: string, tag: string, expected
 export class OciSource implements GenerationSource {
   kind = 'oci' as const;
   cfg: Config;
-  lastError: string | null = null;
+  env: NodeJS.ProcessEnv;
 
-  constructor(cfg: Config) {
+  constructor(cfg: Config, env: NodeJS.ProcessEnv = process.env) {
     this.cfg = cfg;
+    this.env = env;
   }
 
   registryFor(ws: Workspace): { reg: Registry; display: string } | null {
     const ref = parseReference(this.cfg.oci.reference, ws);
     if (!ref) return null;
-    return { reg: new Registry(ref.base, ref.name, { user: this.cfg.oci.user, token: this.cfg.oci.token, timeoutMs: this.cfg.oci.timeoutMs }), display: ref.display };
+    const host = new URL(ref.base).host;
+    return { reg: new Registry(ref.base, ref.name, { timeoutMs: this.cfg.oci.timeoutMs, credentials: credentialCandidates(host, this.env) }), display: ref.display };
   }
 
   async find(ws: Workspace, commits: string[]): Promise<SourceResult> {
@@ -237,7 +256,7 @@ export class OciSource implements GenerationSource {
         if (!commit || !wanted.has(commit) || tagEngine(tag, commit) === null) continue;
         hits.push({ source: 'oci', commit, origin: `${r.display}:${tag}`, materialize: () => pull(r.reg, r.display, tag, commit, this.cfg) });
       }
-      return { hits, summary: `oci: ${r.display}, ${tags.length} tag(s), ${hits.length} within the candidate commits` };
+      return { hits, summary: `oci: ${r.display} (${r.reg.credentialSource ? `credentials from ${r.reg.credentialSource}` : 'anonymous'}), ${tags.length} tag(s), ${hits.length} within the candidate commits` };
     } catch (e) {
       const error = `oci: ${r.display}: ${(e as Error).message}`;
       return { hits: [], summary: error, error };

@@ -20,7 +20,8 @@ interface FakeRegistry {
   corrupt(digest: string): void;
 }
 
-async function fakeRegistry(): Promise<FakeRegistry> {
+/** `secret`: the package is private; anonymous tokens are refused and only `user:secret` at the token endpoint works. */
+async function fakeRegistry(secret?: string): Promise<FakeRegistry> {
   const blobs = new Map<string, Buffer>();
   const manifests = new Map<string, Buffer>();
   const tags = new Map<string, Set<string>>();
@@ -29,11 +30,19 @@ async function fakeRegistry(): Promise<FakeRegistry> {
     const url = new URL(req.url!, 'http://x');
     requests.push(`${req.method} ${url.pathname}`);
     if (url.pathname === '/token') {
+      const basic = req.headers.authorization?.replace(/^Basic /, '');
+      const who = basic ? Buffer.from(basic, 'base64').toString('utf8') : null;
+      if (who && secret && who !== `octo:${secret}`) {
+        res.statusCode = 401;
+        res.end();
+        return;
+      }
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ token: 'T0K' }));
+      res.end(JSON.stringify({ token: who ? 'PRIVATE' : 'ANON' }));
       return;
     }
-    if (req.headers.authorization !== 'Bearer T0K') {
+    const accepted = secret ? ['Bearer PRIVATE'] : ['Bearer ANON', 'Bearer PRIVATE'];
+    if (!accepted.includes(req.headers.authorization ?? '')) {
       res.statusCode = 401;
       res.setHeader('www-authenticate', `Bearer realm="http://${req.headers.host}/token",service="fake",scope="repository:x:pull"`);
       res.end();
@@ -167,6 +176,33 @@ test('OCI: main-<engine> fallback when no candidate commit has a tag, only if it
     assert.ok(!('error' in r2));
     assert.equal(r2.loaded.length, 0);
     assert.match(r2.skipped.join(), /is not a known ancestor of HEAD/);
+  } finally {
+    reg.server.close();
+  }
+});
+
+test('OCI: a private package needs credentials; the source is named, the secret never', async () => {
+  const reg = await fakeRegistry('s3cret');
+  try {
+    const { dir, commits } = gitRepo(1, 'git@github.com:Example/Shop.git', 'private');
+    reg.push('example/context-shop', `${commits[0]}-angular`, layerOf(commits[0]).layer);
+    const cfg = testConfig({ cacheDir: tmp(), oci: { enabled: true, reference: `${reg.url}/{owner}/context-{repo}` } });
+    const base = { PATH: process.env.PATH, HOME: tmp('mcp-home-'), DOCKER_CONFIG: tmp('mcp-docker-') };
+
+    const anon = await new Resolver(cfg, undefined, base).resolve(dir);
+    assert.ok(!('error' in anon));
+    assert.equal(anon.loaded.length, 0);
+    assert.match(anon.errors.join(), /tag list failed: HTTP 401/);
+
+    const wrong = await new Resolver(cfg, undefined, { ...base, DEVOS_MCP_REGISTRY_USER: 'octo', DEVOS_MCP_REGISTRY_TOKEN: 'nope' }).resolve(dir);
+    assert.ok(!('error' in wrong));
+    assert.equal(wrong.loaded.length, 0);
+
+    const ok = await new Resolver(cfg, undefined, { ...base, DEVOS_MCP_REGISTRY_USER: 'octo', DEVOS_MCP_REGISTRY_TOKEN: 's3cret' }).resolve(dir);
+    assert.ok(!('error' in ok));
+    assert.equal(ok.loaded.length, 1, [...ok.sources, ...ok.skipped, ...ok.errors].join('\n'));
+    assert.match(ok.sources.join(), /credentials from env/);
+    assert.doesNotMatch(JSON.stringify([ok.sources, ok.errors, ok.skipped, anon.errors, wrong.errors]), /s3cret|nope/);
   } finally {
     reg.server.close();
   }

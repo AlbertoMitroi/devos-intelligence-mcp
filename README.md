@@ -2,7 +2,7 @@
 
 An MCP server that answers AI agents (Claude Code, Codex) from the intelligence generations of the repository they work in: semantic graph, observations and context packs written by `devos-dotnet-intelligence` and `devos-angular-intelligence` in the shared [intelligence contract](../devos-intelligence-contract). The agent never receives a generation, only compact answers with `file:line` evidence and short redacted snippets.
 
-**Status:** 12 tools over `index.sqlite` and context packs; generation resolved from local folders, the OCI cache or GHCR (`context-<repo>:<sha>-<engine>`), nearest analyzed ancestor announced in every answer. Unit and integration tests pass locally (`scripts/verify.sh`), including the official MCP SDK client and a `registry:2` round trip in the release layout. Not published (decision M1).
+**Status:** 13 tools over `index.sqlite` and context packs; generation resolved from local folders, the OCI cache or GHCR (`context-<repo>:<sha>-<engine>`, private packages through the environment, the Docker credential store or `gh`), nearest analyzed ancestor announced in every answer; the .NET index additions (per-usage evidence, observation search, messaging) are used when present. Unit and integration tests pass locally (`scripts/verify.sh`), including the official MCP SDK client and a `registry:2` round trip in the release layout. Not published (decision M1).
 
 ## Use
 
@@ -34,3 +34,7 @@ With Node.js 24.22 or later on the host, `npm ci` then `npm test` runs the unit 
 - Open questions: [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md)
 - Dependencies and licenses: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
 - Reports: [docs/reports/](docs/reports/)
+
+## License
+
+MIT, see [LICENSE](LICENSE).

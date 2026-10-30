@@ -25,14 +25,14 @@ function call(res: Resolution, name: string, args: Record<string, unknown> = {})
   return body.join('\n');
 }
 
-test('tool list: twelve tools with object schemas', () => {
-  assert.deepEqual(TOOLS.map((t) => t.name), ['generation_info', 'search', 'symbol', 'refs', 'callers', 'callees', 'implementations', 'di', 'routes', 'http', 'who_calls', 'context']);
+test('tool list: thirteen tools with object schemas', () => {
+  assert.deepEqual(TOOLS.map((t) => t.name), ['generation_info', 'search', 'symbol', 'refs', 'callers', 'callees', 'implementations', 'di', 'routes', 'http', 'who_calls', 'messages', 'context']);
   for (const t of TOOLS) assert.equal((t.inputSchema as { type: string }).type, 'object');
 });
 
 test('generation_info, symbol, ambiguity', async () => {
   const res = await setup();
-  assert.match(call(res, 'generation_info'), /source local: .*shop-angular[\s\S]*index entities 10, relations/);
+  assert.match(call(res, 'generation_info'), /source local: .*shop-angular[\s\S]*index schema \(unversioned\), entities 10, relations/);
   const s = call(res, 'symbol', { symbol: 'OrdersService.load' });
   assert.match(s, /^method OrdersService.load\n  id ts:.:src\/app\/orders.service#OrdersService.load/);
   assert.match(s, /declared at src\/app\/orders.service.ts:12/);
@@ -143,4 +143,33 @@ test('answers after a commit on top of the generation carry the warning and [cha
   const out = runTool(TOOLS.find((t) => t.name === 'callees')!, res, { symbol: 'OrdersService.load' }).text;
   assert.match(out.split('\n')[0], /^WARNING generation shop-angular .* \(2 commit\(s\) behind\); 1 file\(s\) changed since/);
   assert.match(out, /src\/app\/orders.service.ts:13 \[changed\]/);
+});
+
+async function setupDotnet(status?: string): Promise<Resolution> {
+  const { dir, commits } = gitRepo(1);
+  const folder = tmp();
+  writeGeneration(join(folder, 'shop-angular'), { commit: commits[0], dotnetExtras: true, status });
+  const res = await new Resolver(testConfig({ generationRoots: [folder] })).resolve(dir);
+  assert.ok(!('error' in res));
+  return res;
+}
+
+test('.NET index additions: per-usage refs, runtime targets, observation search, messages, indexSchema', async () => {
+  const res = await setupDotnet();
+  const refs = call(res, 'refs', { symbol: 'OrdersService' });
+  assert.match(refs, /src\/app\/order-list.ts:7 {2}read {2}from OrderList\n {4}private readonly orders = inject\(OrdersService\);/);
+  assert.match(refs, /src\/app\/order-list.ts:21 {2}read {2}from OrderList\n {4}OrdersService.cacheKey/);
+  assert.match(refs, /1-2 of 2 references/, 'one row per usage evidence, not per relation');
+  assert.match(call(res, 'callees', { symbol: 'OrderList.ngOnInit' }), /SqlRepo {2}src\/app\/order-list.ts:12 {2}\(possible runtime target\)/);
+  assert.match(call(res, 'search', { query: 'endpoint', kind: 'observation' }), /^observation http.endpoint src\/Api\/OrdersController.cs:20\n {4}http.endpoint GET \/v1\/orders/);
+  const m = call(res, 'messages');
+  assert.match(m, /publish {2}OrderPlaced {2}kafka {2}topic orders.placed \(configuration\) {2}by OrdersService.load {2}src\/app\/orders.service.ts:20\n {2}link consumes_contract exact -> messaging.subscribe by ArchiveService.load src\/app\/archive.service.ts:5/);
+  assert.match(call(res, 'messages', { contract: 'nothing' }), /no publisher or subscriber matches 'nothing'/);
+  assert.match(call(res, 'generation_info'), /index schema 1, entities/);
+});
+
+test('partial generation: an empty answer says absence is not proof', async () => {
+  const res = await setupDotnet('partial');
+  const tool = TOOLS.find((t) => t.name === 'routes')!;
+  assert.match(runTool(tool, res, { prefix: '/nothing' }).text, /no routes under '\/nothing'\nnote: shop-angular is partial; an absence of results is not proof of absence/);
 });

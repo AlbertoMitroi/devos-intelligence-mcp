@@ -32,7 +32,7 @@ Without Docker, with Node.js 24.22 or later on the host:
 claude mcp add devos-intelligence --scope user -- node --disable-warning=ExperimentalWarning ~/repos/devos/devos-intelligence-mcp/src/cli.ts serve
 ```
 
-Check with `claude mcp list`; inside a session, `/mcp` shows the server and its 12 tools.
+Check with `claude mcp list`; inside a session, `/mcp` shows the server and its 13 tools.
 
 ## Codex
 
@@ -66,11 +66,19 @@ All optional; the defaults work on the owner's machine.
 | `DEVOS_MCP_MAX_ANCESTORS` | `50` | first-parent ancestors of HEAD to try before the `main-<engine>` tags |
 | `DEVOS_MCP_OCI` | `on` | `off` disables the registry (cache and local folders still work) |
 | `DEVOS_MCP_OCI_REFERENCE` | `ghcr.io/{owner}/context-{repo}` | repository of the artifacts; `{owner}` and `{repo}` come from the `origin` remote; an `http://` prefix means a plain-HTTP registry |
-| `DEVOS_MCP_REGISTRY_USER`, `DEVOS_MCP_REGISTRY_TOKEN` (or `GHCR_TOKEN`) | anonymous | credentials for private packages (a token with `read:packages`); never printed |
+| `DEVOS_MCP_REGISTRY_USER`, `DEVOS_MCP_REGISTRY_TOKEN` (or `GHCR_TOKEN`) | see below | credentials for private packages (a token with `read:packages`); never printed |
 | `DEVOS_MCP_IMAGE` | `devos-intelligence-mcp:local` | image the launcher runs |
 | `DEVOS_MCP_DOCKER_NETWORK` | Docker default | network for the launcher's container |
 
-The `context-*` packages are created private by the release workflow; until the owner makes them public, pulls need `DEVOS_MCP_REGISTRY_TOKEN`.
+## Private packages
+
+The `context-*` packages start private. The server first asks for an anonymous token; when the registry refuses it, it tries, in order and once each:
+
+1. `DEVOS_MCP_REGISTRY_TOKEN` (or `GHCR_TOKEN`), with `DEVOS_MCP_REGISTRY_USER` (default `token`);
+2. the Docker configuration (`$DOCKER_CONFIG/config.json` or `~/.docker/config.json`): inline `auths`, `credHelpers` for the host, then `credsStore`, through `docker-credential-<helper> get` (what `docker login ghcr.io` stores);
+3. `gh auth token`, for `ghcr.io` only. The `gh` token needs the `read:packages` scope (`gh auth refresh -s read:packages`).
+
+`generation_info` names the source that worked (`credentials from env`, `docker-credential-desktop`, `gh`), never the value. In Docker the container has no credential store, so `scripts/mcp-docker.sh` does steps 2 and 3 on the host when no token is set and passes the result by variable name only. Once a package is public, nothing is needed.
 
 ## Command line
 
@@ -102,6 +110,7 @@ node src/cli.ts verify ~/repos/devos/_generations/lab-web-angular
 | `routes` | `prefix` | UI routes and HTTP endpoints |
 | `http` | `route`, `method` | outgoing HTTP calls with base address source and caller |
 | `who_calls` | `route`, `method`, `depth` | calls matching the route, their callers, links to the endpoint |
+| `messages` | `contract` | publishers and subscribers with transport, destination and links |
 | `context` | `project`, `cursor` | context pack cards |
 
 Every tool takes `generation` to pick one of several loaded generations; list tools take `limit` (default 20, max 100) and `cursor`. A symbol is an entity id, a name, or a qualified tail (`LeasesService.search`); an ambiguous one lists candidate ids.

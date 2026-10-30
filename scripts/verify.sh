@@ -40,7 +40,7 @@ docker build --target runtime -t "$tag:local" "$root"
 
 step "runtime self-check"
 docker run --rm --network none "$tag:local" --version
-[ "$(docker run --rm --network none "$tag:local" tools | wc -l | tr -d ' ')" = "12" ]
+[ "$(docker run --rm --network none "$tag:local" tools | wc -l | tr -d ' ')" = "13" ]
 [ "$(docker run --rm --entrypoint id "$tag:local" -u)" != "0" ]
 [ "$(docker run --rm --entrypoint sh "$tag:local" -c 'ls /opt/devos-intelligence-mcp')" = "$(printf 'package.json\nsrc')" ]
 

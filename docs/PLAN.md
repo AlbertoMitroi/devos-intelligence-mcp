@@ -50,6 +50,7 @@ All take optional `generation` (label filter when several are loaded), and the l
 | `routes` | `prefix` | UI routes (`ui.route`) and HTTP endpoints (`http.endpoint`) with target and `file:line` |
 | `http` | `route` prefix, `method` | outgoing HTTP calls (`http.call`): method, canonical route, resolution, base address source, caller, `file:line` |
 | `who_calls` | `route`, `method` | the HTTP calls whose canonical route matches (parameters normalized to `{}`), their caller methods and the callers of those, plus `configured_route` links to endpoints when present |
+| `messages` | `contract` | publishers and subscribers (contract, transport, destination) with `file:line` and their links (added with the .NET index additions) |
 | `context` | `project` (optional) | without a project: the list of context packs; with one: that card, paged |
 
 ## Layout

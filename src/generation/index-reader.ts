@@ -1,6 +1,8 @@
 // Engine-neutral reader of `index.sqlite` (PLAN M7). Uses only the tables both engines write (the Angular engine's
 // `src/artifacts/sqlite.ts`, mirrored by the .NET engine in Step 4) and the contract kinds; observation details come
-// from the canonical JSON column, so engine extensions are carried, never required.
+// from the canonical JSON column, so engine extensions are carried, never required. The .NET additions agreed for the
+// shared schema (`relation_evidence`, `observation_evidence`, `link_evidence`, `evidence_snippet`, meta `indexSchema`,
+// search kind `observation`) are used when present and never required.
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 
@@ -12,12 +14,14 @@ export type SymbolMatch = { entity: Row } | { candidates: Row[]; total: number }
 
 export class IndexReader {
   db: DatabaseSync;
+  tables: Set<string>;
   hasSearch: boolean;
   cache = new Map<string, unknown>();
 
-  constructor(db: DatabaseSync, hasSearch: boolean) {
+  constructor(db: DatabaseSync, tables: Set<string>) {
     this.db = db;
-    this.hasSearch = hasSearch;
+    this.tables = tables;
+    this.hasSearch = tables.has('search');
   }
 
   static open(path: string): { reader: IndexReader | null; error: string | null } {
@@ -30,7 +34,7 @@ export class IndexReader {
         db.close();
         return { reader: null, error: `index.sqlite lacks table(s) ${missing.join(', ')}; schema not recognized` };
       }
-      return { reader: new IndexReader(db, tables.has('search')), error: null };
+      return { reader: new IndexReader(db, tables), error: null };
     } catch (e) {
       return { reader: null, error: `index.sqlite cannot be opened: ${(e as Error).message}` };
     }
@@ -138,6 +142,22 @@ export class IndexReader {
       id,
       ...(usage ? [usage] : []),
     );
+  }
+
+  /**
+   * References to an entity, one row per usage: through `relation_evidence` when the index has it (a .NET relation
+   * aggregates several usages), else the relation's own first location.
+   */
+  references(id: string, usage: string | null): Row[] {
+    const u = usage ? ' and r.usage = ?' : '';
+    const p: (string | number)[] = usage ? [id, usage] : [id];
+    if (this.tables.has('relation_evidence')) {
+      return this.all(
+        `select r.id, r.from_id, r.usage, e.context, e.path, e.line, e.text from relations r join relation_evidence re on re.relation = r.id join evidence e on e.id = re.evidence where r.kind = 'references' and r.to_id = ?${u} order by e.path, e.line, e.col, r.id`,
+        ...p,
+      );
+    }
+    return this.all(`select r.id, r.from_id, r.usage, r.context, r.path, r.line, null as text from relations r where r.kind = 'references' and r.to_id = ?${u} order by r.path, r.line, r.id`, ...p);
   }
 
   countRelations(kinds: string[], direction: 'to' | 'from', id: string): number {

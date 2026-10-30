@@ -1,5 +1,5 @@
 // Configuration from the environment (PLAN, resolution rules). Every value has a default that works on the owner's
-// machine; nothing here is a secret except the optional registry token, which is never printed.
+// machine. Registry credentials are not configuration: src/resolve/credentials.ts looks them up when needed.
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -13,8 +13,6 @@ export interface Config {
     enabled: boolean;
     /** `ghcr.io/{owner}/context-{repo}`; an `http://` prefix means a plain-HTTP registry (tests). */
     reference: string;
-    user: string | null;
-    token: string | null;
     maxBytes: number;
     timeoutMs: number;
   };
@@ -35,8 +33,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     oci: {
       enabled: (env.DEVOS_MCP_OCI ?? 'on') !== 'off',
       reference: env.DEVOS_MCP_OCI_REFERENCE || 'ghcr.io/{owner}/context-{repo}',
-      user: env.DEVOS_MCP_REGISTRY_USER || null,
-      token: env.DEVOS_MCP_REGISTRY_TOKEN || env.GHCR_TOKEN || null,
       maxBytes: int(env.DEVOS_MCP_OCI_MAX_BYTES, 1024 * 1024 * 1024),
       timeoutMs: int(env.DEVOS_MCP_OCI_TIMEOUT_MS, 30000),
     },

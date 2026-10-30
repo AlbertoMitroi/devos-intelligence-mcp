@@ -73,9 +73,9 @@ export class Resolver {
   oci: OciSource;
   cached: { key: string; resolution: Resolution; at: number } | null = null;
 
-  constructor(cfg: Config, sources?: GenerationSource[]) {
+  constructor(cfg: Config, sources?: GenerationSource[], env: NodeJS.ProcessEnv = process.env) {
     this.cfg = cfg;
-    this.oci = new OciSource(cfg);
+    this.oci = new OciSource(cfg, env);
     this.sources = sources ?? [
       new FolderSource('local', cfg.generationRoots, 1),
       new FolderSource('cache', [join(cfg.cacheDir, 'generations')], 3),

@@ -44,7 +44,10 @@ interface Item {
 /** Items of all generations, paged together; the label prefixes each item only when several generations are loaded. */
 function render(ctx: ToolContext, items: Item[], noun: string, empty: string): string {
   const p = page(items, limitOf(ctx.args.limit), offsetOf(ctx.args.cursor));
-  if (p.total === 0) return empty;
+  if (p.total === 0) {
+    const partial = ctx.gens.filter((g) => g.manifest.status && g.manifest.status !== 'complete');
+    return partial.length ? `${empty}\nnote: ${partial.map((g) => g.label).join(', ')} is ${partial[0].manifest.status}; an absence of results is not proof of absence` : empty;
+  }
   const multi = ctx.gens.length > 1;
   const body = p.items.map((it) => (multi ? [`[${it.g.label}] ${it.lines[0]}`, ...it.lines.slice(1)] : it.lines).join('\n'));
   return [...body, pageFooter(p, noun)].join('\n');
@@ -102,7 +105,8 @@ function resolveEach(ctx: ToolContext, term: string): { found: { g: Loaded; e: R
 function edgesOf(g: Loaded, id: string, direction: 'callers' | 'callees'): Row[] {
   const r = g.reader!;
   const dir = direction === 'callers' ? 'to' : 'from';
-  const rows = [...r.relations(['calls_declared_target'], dir, id), ...r.relations(['references'], dir, id, 'invocation')];
+  // possible_runtime_target: interface or virtual dispatch to a known implementation (.NET); always a candidate.
+  const rows = [...r.relations(['calls_declared_target'], dir, id), ...r.relations(['references'], dir, id, 'invocation'), ...r.relations(['possible_runtime_target'], dir, id)];
   const seen = new Set<string>();
   return rows.filter((x) => {
     const k = `${direction === 'callers' ? x.from_id : x.to_id}|${x.path}|${x.line}`;
@@ -128,7 +132,7 @@ const generationInfo: ToolDef = {
     for (const g of ctx.gens) {
       const m = g.manifest;
       const cov = m.coverage?.summary ? Object.entries(m.coverage.summary).map(([k, v]) => `${k} ${v}`).join(', ') : 'n/a';
-      const counts = g.reader ? Object.entries(g.reader.counts()).map(([k, v]) => `${k} ${v}`).join(', ') : g.readerError;
+      const counts = g.reader ? `schema ${g.reader.meta().indexSchema ?? '(unversioned)'}, ${Object.entries(g.reader.counts()).map(([k, v]) => `${k} ${v}`).join(', ')}` : g.readerError;
       const packs = listPacks(g.dir, m);
       out.push(
         '',
@@ -151,7 +155,7 @@ const generationInfo: ToolDef = {
 const search: ToolDef = {
   name: 'search',
   description: 'Full-text search over entity names and signatures and over redacted code snippets of the generation. Returns kind, compact name or file:line, and one line of text.',
-  inputSchema: schema({ query: { type: 'string', description: 'Words to match (prefix match from 3 characters).' }, kind: { type: 'string', enum: ['entity', 'snippet'] }, ...paging }, ['query']),
+  inputSchema: schema({ query: { type: 'string', description: 'Words to match (prefix match from 3 characters).' }, kind: { type: 'string', enum: ['entity', 'snippet', 'observation'], description: 'observation: endpoints, calls, config keys, messages (when the engine indexes them).' }, ...paging }, ['query']),
   run(ctx) {
     const q = str(ctx.args.query);
     if (!q) return 'missing query';
@@ -167,6 +171,10 @@ const search: ToolDef = {
           const e = r.entity(x.ref);
           const d = r.firstDeclaration(x.ref);
           return { g, lines: lines(`entity ${e?.kind ?? ''} ${shortName(x.ref)}  ${d ? loc(d.path, d.line, ctx.fresh.changed) : '(no declaration: package symbol)'}`, `    id ${x.ref}`) };
+        }
+        if (x.kind === 'observation') {
+          const o = r.observation(x.ref);
+          return { g, lines: lines(`observation ${o?.kind ?? ''} ${o ? loc(o._path, o._line, ctx.fresh.changed) : x.ref}`, quote(x.text)) };
         }
         const ev = r.one('select path, line from evidence where text = ? order by path, line limit 1', x.text);
         return { g, lines: lines(`snippet ${ev ? loc(ev.path, ev.line, ctx.fresh.changed) : x.ref}`, quote(x.text)) };
@@ -222,9 +230,9 @@ const refs: ToolDef = {
     const usage = str(ctx.args.usage);
     const { found, messages } = resolveEach(ctx, term);
     const items: Item[] = found.flatMap(({ g, e }) =>
-      g.reader!.relations(['references'], 'to', e.id, usage).map((x) => ({
+      g.reader!.references(e.id, usage).map((x) => ({
         g,
-        lines: lines(`${loc(x.path, x.line, ctx.fresh.changed)}  ${x.usage ?? ''}  from ${shortName(x.from_id)}`, quote(g.reader!.snippetAt(x.path, x.line, x.context))),
+        lines: lines(`${loc(x.path, x.line, ctx.fresh.changed)}  ${x.usage ?? ''}  from ${shortName(x.from_id)}`, quote(x.text ?? g.reader!.snippetAt(x.path, x.line, x.context))),
       })),
     );
     const head = found.map(({ e }) => `references to ${shortName(e.id)}${usage ? ` (usage ${usage})` : ''}`);
@@ -253,7 +261,7 @@ function callGraph(direction: 'callers' | 'callees'): ToolDef {
             for (const x of edgesOf(g, f, direction)) {
               const other = direction === 'callers' ? x.from_id : x.to_id;
               const via = d > 1 ? `  (via ${shortName(f)})` : '';
-              items.push({ g, lines: lines(`${'  '.repeat(d - 1)}${shortName(other)}  ${loc(x.path, x.line, ctx.fresh.changed)}${via}`, d === 1 ? quote(g.reader!.snippetAt(x.path, x.line, x.context)) : null) });
+              items.push({ g, lines: lines(`${'  '.repeat(d - 1)}${shortName(other)}  ${loc(x.path, x.line, ctx.fresh.changed)}${via}${x.kind === 'possible_runtime_target' ? '  (possible runtime target)' : ''}`, d === 1 ? quote(g.reader!.snippetAt(x.path, x.line, x.context)) : null) });
               if (!seen.has(other)) {
                 seen.add(other);
                 next.push(other);
@@ -419,6 +427,34 @@ const whoCalls: ToolDef = {
   },
 };
 
+const messages: ToolDef = {
+  name: 'messages',
+  description: 'Messaging: publishers and subscribers (contract, transport, destination), with file:line and the links between them; filter by contract or destination name. Empty for engines that do not observe messaging.',
+  inputSchema: schema({ contract: { type: 'string', description: 'Only messages whose contract or destination contains this text.' }, ...paging }),
+  run(ctx) {
+    const term = str(ctx.args.contract)?.toLowerCase() ?? null;
+    const { items, notes } = withIndex(ctx, (g) => {
+      const r = g.reader!;
+      const obs = r.observations(['messaging.publish', 'messaging.subscribe']).filter((o) => {
+        if (!term) return true;
+        return [o.contract, o.messageType, o.destination?.name, o.topic, o.queue].some((v) => typeof v === 'string' && v.toLowerCase().includes(term));
+      });
+      const links = r.linksFrom(obs.map((o) => o.id));
+      return obs.map((o) => {
+        const dest = o.destination ? `${o.destination.kind ?? 'destination'} ${o.destination.name ?? '?'}${o.destination.nameSource ? ` (${o.destination.nameSource})` : ''}` : 'destination unknown';
+        const who = o.kind === 'messaging.publish' ? o.publisher ?? o.sender : o.handler ?? o.consumer ?? o.subscriber;
+        const block = [`${o.kind === 'messaging.publish' ? 'publish  ' : 'subscribe'} ${shortName(o.contract ?? o.messageType)}  ${o.transport ?? (o.transports ? o.transports.join('|') : '')}  ${dest}  by ${shortName(who)}  ${loc(o._path, o._line, ctx.fresh.changed)}`.replace(/\s{3,}/g, '  ')];
+        for (const l of links.filter((x) => x.from_obs === o.id)) {
+          const to = l.to_obs ? r.observation(l.to_obs) : null;
+          block.push(`  link ${l.kind} ${l.resolution}${to ? ` -> ${to.kind} by ${shortName(to.handler ?? to.consumer ?? to.subscriber)} ${loc(to._path, to._line, ctx.fresh.changed)}` : `: ${l.reason ?? 'no target'}`}`);
+        }
+        return { g, lines: block };
+      });
+    });
+    return join(notes, render(ctx, items, 'messaging facts', term ? `no publisher or subscriber matches '${term}'` : 'no messaging observed'));
+  },
+};
+
 const PACK_PAGE = 6000;
 
 const context: ToolDef = {
@@ -457,7 +493,7 @@ const context: ToolDef = {
   },
 };
 
-export const TOOLS: ToolDef[] = [generationInfo, search, symbol, refs, callGraph('callers'), callGraph('callees'), implementations, di, routes, http, whoCalls, context];
+export const TOOLS: ToolDef[] = [generationInfo, search, symbol, refs, callGraph('callers'), callGraph('callees'), implementations, di, routes, http, whoCalls, messages, context];
 
 /** Runs a tool against a resolution: freshness header first, then the tool's answer. */
 export function runTool(tool: ToolDef, res: Resolution, args: Record<string, unknown>): { text: string; isError: boolean } {
