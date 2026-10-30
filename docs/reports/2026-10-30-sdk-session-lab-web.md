@@ -8,7 +8,7 @@ Tools listed: `generation_info`, `search`, `symbol`, `refs`, `callers`, `callees
 
 ```text
 generation lab-web-angular (angular-intelligence 0.1.0, contract 1.1) at e21eef1712b2, exact match for HEAD
-workspace /tmp/mcp-it-qqx4pk/repo
+workspace /tmp/mcp-it-o3fs5u/repo
 HEAD e21eef1712b25463d61687efc2f547d9dc0949f1
 remote https://github.com/AlbertoMitroi/devos-lab-web.git
 resolved commit e21eef1712b25463d61687efc2f547d9dc0949f1 (HEAD); 0 file(s) changed since

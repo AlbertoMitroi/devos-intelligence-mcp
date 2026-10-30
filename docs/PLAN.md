@@ -74,7 +74,9 @@ All take optional `generation` (label filter when several are loaded), and the l
 3. **Ancestor fallback**: a clone of `devos-lab-web` with one extra commit changing a service file: the answer carries the warning, distance 1, and `[changed]` on that file's evidence.
 4. **OCI**: a `registry:2` container and ORAS push of `lab-web-angular` in the release layout; the server with local sources off pulls, verifies, caches, answers; a second run answers from the cache with the registry unreachable; `main-angular` is used beyond the window. A corrupted layer, a wrong `revision` and a wrong `manifest-sha256` annotation are refused (unit tests, in-process registry with a Bearer challenge).
 5. **MCP clients**: the official SDK client (`StdioClientTransport`) lists the tools and calls each against `lab-web-angular`; a scripted session transcript goes into `docs/reports/`.
-6. **.NET**: the same integration tests on the lab .NET generations once they carry `index.sqlite` (Step 4 session).
+6. **.NET**: `lab-leasing-dotnet` with its `index.sqlite`: the 16 endpoints of `ground-truth.yml` (`leasing-endpoints`), messages with configuration destinations, a type preferred over its constructor.
+7. **Contract**: the vendored `index.sql` equals `devos-intelligence-contract` at the vendored tag (integration) and its recorded SHA-256 (unit).
+8. **Real registry** (opt-in, `MCP_VERIFY_GHCR=1`): anonymous pull of the latest published `<sha>-angular` of `context-devos-lab-web` and `<sha>-dotnet` of `context-devos-lab-leasing` from ghcr.io, exact and one commit ahead (then from the cache).
 
 ## Not in scope now
 

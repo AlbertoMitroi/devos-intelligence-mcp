@@ -10,6 +10,12 @@
 
 No npm package is installed in the runtime stage.
 
+## Vendored
+
+| File | Source | Use |
+|---|---|---|
+| `schema/index/v1/index.sql` | `devos-intelligence-contract` tag `v1.2.0` (`2828fd6`), SHA-256 in `schema/VENDOR.json` | normative index schema (MIT) |
+
 ## Development and tests
 
 | Dependency | Version | Use | License |

@@ -5,10 +5,12 @@
 // search kind `observation`) are used when present and never required.
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
+import { indexSchema } from './index-schema.ts';
 
 export type Row = Record<string, any>;
 
-const REQUIRED_TABLES = ['meta', 'entities', 'declarations', 'evidence', 'relations', 'observations', 'links'];
+/** The `base` tables of index.sql that the queries read; `diagnostics`, `projects` and `search` are not needed to answer. */
+const READ_TABLES = ['meta', 'entities', 'declarations', 'evidence', 'relations', 'observations', 'links'];
 
 export type SymbolMatch = { entity: Row } | { candidates: Row[]; total: number } | { none: string };
 
@@ -29,7 +31,7 @@ export class IndexReader {
     try {
       const db = new DatabaseSync(path, { readOnly: true });
       const tables = new Set((db.prepare("select name from sqlite_master where type in ('table', 'view')").all() as Row[]).map((r) => r.name as string));
-      const missing = REQUIRED_TABLES.filter((t) => !tables.has(t));
+      const missing = indexSchema().tables.base.filter((t) => READ_TABLES.includes(t) && !tables.has(t));
       if (missing.length) {
         db.close();
         return { reader: null, error: `index.sqlite lacks table(s) ${missing.join(', ')}; schema not recognized` };
@@ -86,6 +88,9 @@ export class IndexReader {
     const source = rows.filter((r) => r.origin === 'source');
     const pool = source.length > 0 ? source : rows;
     if (pool.length === 1) return { entity: pool[0] };
+    // A .NET type and its constructors share the name: the type is meant (contract v1.2, query name resolution).
+    const types = pool.filter((r) => r.kind !== 'constructor');
+    if (types.length === 1) return { entity: types[0] };
     return { candidates: pool.slice(0, 10), total: pool.length };
   }
 
@@ -166,12 +171,23 @@ export class IndexReader {
     return Number(this.one(`select count(*) as n from relations where kind in (${marks}) and ${col} = ?`, ...kinds, id)!.n);
   }
 
+  /**
+   * An observation's location: its `site` evidence when the record has one (contract v1.2), else the index row's
+   * `path` and `line` (from 1.2 the site too; before, the first evidence).
+   */
+  located(r: Row): Row {
+    const o = JSON.parse(r.json) as Row;
+    const site = typeof o.site === 'string' ? this.one('select path, line from evidence where id = ?', o.site) : undefined;
+    return { ...o, _path: site?.path ?? r.path, _line: site?.line ?? r.line };
+  }
+
   /** Observations of the given kinds with their parsed JSON, ordered by location. Cached per kind set. */
   observations(kinds: string[]): Row[] {
     const key = `obs:${kinds.join(',')}`;
     if (!this.cache.has(key)) {
       const marks = kinds.map(() => '?').join(', ');
-      const rows = this.all(`select id, kind, project, path, line, json from observations where kind in (${marks}) order by path, line, id`, ...kinds).map((r) => ({ ...JSON.parse(r.json), _path: r.path, _line: r.line }));
+      const rows = this.all(`select id, kind, project, path, line, json from observations where kind in (${marks}) order by path, line, id`, ...kinds).map((r) => this.located(r));
+      rows.sort((a, b) => String(a._path).localeCompare(String(b._path)) || Number(a._line) - Number(b._line) || String(a.id).localeCompare(String(b.id)));
       this.cache.set(key, rows);
     }
     return this.cache.get(key) as Row[];
@@ -185,7 +201,7 @@ export class IndexReader {
 
   observation(id: string): Row | undefined {
     const r = this.one('select json, path, line from observations where id = ?', id);
-    return r ? { ...JSON.parse(r.json), _path: r.path, _line: r.line } : undefined;
+    return r ? this.located(r) : undefined;
   }
 
   close(): void {

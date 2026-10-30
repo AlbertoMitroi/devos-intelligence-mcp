@@ -6,7 +6,8 @@
 #    (`<sha>-angular` and `main-angular`, same artifact type, layer media type and annotations),
 # 4. runs the integration tests in the test image: real generations, the official MCP SDK client, the registry,
 # 5. drives the runtime image through scripts/mcp-docker.sh like a client would, against a clone of lab-web.
-# MCP_VERIFY_TRANSCRIPT=path writes the SDK client session as Markdown.
+# MCP_VERIFY_TRANSCRIPT=path writes the SDK client session as Markdown; MCP_VERIFY_GHCR=1 also pulls the lab
+# generations from the real ghcr.io (network, public packages).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,6 +15,8 @@ devos="${DEVOS_ROOT:-$(cd "$root/.." && pwd)}"
 [ -d "$devos/_generations" ] || devos="$HOME/repos/devos"
 generations="$devos/_generations"
 lab_web="$devos/devos-lab-web"
+lab_leasing="$devos/devos-lab-leasing"
+contract="$devos/devos-intelligence-contract"
 eshop="$generations/src/eshoponabp"
 tag="${MCP_VERIFY_TAG:-devos-intelligence-mcp}"
 work="$root/.verify"
@@ -42,7 +45,7 @@ step "runtime self-check"
 docker run --rm --network none "$tag:local" --version
 [ "$(docker run --rm --network none "$tag:local" tools | wc -l | tr -d ' ')" = "13" ]
 [ "$(docker run --rm --entrypoint id "$tag:local" -u)" != "0" ]
-[ "$(docker run --rm --entrypoint sh "$tag:local" -c 'ls /opt/devos-intelligence-mcp')" = "$(printf 'package.json\nsrc')" ]
+[ "$(docker run --rm --entrypoint sh "$tag:local" -c 'ls /opt/devos-intelligence-mcp')" = "$(printf 'package.json\nschema\nsrc')" ]
 
 step "local registry with lab-web-angular (release layout)"
 docker network create "$net" > /dev/null
@@ -65,8 +68,9 @@ docker run --rm --network "$net" -v "$work/layer:/work" -w /work "$oras_image" \
 
 step "integration tests (real generations, SDK client, registry)"
 docker run --rm --network "$net" --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -v "$generations:/generations:ro" -v "$lab_web:/repos/devos-lab-web:ro" -v "$eshop:/repos/eshoponabp:ro" -v "$work/out:/out" \
+  -v "$generations:/generations:ro" -v "$lab_web:/repos/devos-lab-web:ro" -v "$eshop:/repos/eshoponabp:ro" -v "$lab_leasing:/repos/devos-lab-leasing:ro" -v "$contract:/repos/devos-intelligence-contract:ro" -v "$work/out:/out" \
   -e DEVOS_IT_GENERATIONS=/generations -e DEVOS_IT_LAB_WEB=/repos/devos-lab-web -e DEVOS_IT_ESHOP=/repos/eshoponabp \
+  -e DEVOS_IT_LAB_LEASING=/repos/devos-lab-leasing -e DEVOS_IT_CONTRACT=/repos/devos-intelligence-contract -e DEVOS_IT_GHCR="${MCP_VERIFY_GHCR:-0}" \
   -e DEVOS_IT_REGISTRY=http://registry:5000 -e DEVOS_IT_TRANSCRIPT=/out/transcript.md \
   --entrypoint node "$tag:test" --test --test-reporter=spec --test-concurrency=1 "tests/integration/*.test.ts"
 if [ -n "${MCP_VERIFY_TRANSCRIPT:-}" ]; then cp "$work/out/transcript.md" "$MCP_VERIFY_TRANSCRIPT"; fi

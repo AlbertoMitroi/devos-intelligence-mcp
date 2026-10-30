@@ -2,7 +2,7 @@
 
 An MCP server that answers AI agents (Claude Code, Codex) from the intelligence generations of the repository they work in: semantic graph, observations and context packs written by `devos-dotnet-intelligence` and `devos-angular-intelligence` in the shared [intelligence contract](../devos-intelligence-contract). The agent never receives a generation, only compact answers with `file:line` evidence and short redacted snippets.
 
-**Status:** 13 tools over `index.sqlite` and context packs; generation resolved from local folders, the OCI cache or GHCR (`context-<repo>:<sha>-<engine>`, private packages through the environment, the Docker credential store or `gh`), nearest analyzed ancestor announced in every answer; the .NET index additions (per-usage evidence, observation search, messaging) are used when present. Unit and integration tests pass locally (`scripts/verify.sh`), including the official MCP SDK client and a `registry:2` round trip in the release layout. Not published (decision M1).
+**Status:** 13 tools over `index.sqlite` and context packs; generation resolved from local folders, the OCI cache or GHCR (`context-<repo>:<sha>-<engine>`, private packages through the environment, the Docker credential store or `gh`), nearest analyzed ancestor announced in every answer; the index is read by contract v1.2.0 `index.sql` (vendored, drift-checked), the optional evidence tables and `site` are used when present. Tested against the real public packages on ghcr.io for `devos-lab-web` (Angular) and `devos-lab-leasing` (.NET). Unit and integration tests pass locally (`scripts/verify.sh`), including the official MCP SDK client and a `registry:2` round trip in the release layout. Not published (decision M1).
 
 ## Use
 

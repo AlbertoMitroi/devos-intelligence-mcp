@@ -32,6 +32,7 @@ ENV DEVOS_MCP_GENERATIONS=/generations \
 WORKDIR /opt/devos-intelligence-mcp
 COPY package.json ./
 COPY src ./src
+COPY schema ./schema
 RUN mkdir -p /generations /cache && chmod 1777 /cache
 USER node
 ENTRYPOINT ["node", "/opt/devos-intelligence-mcp/src/cli.ts"]

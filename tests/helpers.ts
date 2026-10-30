@@ -8,24 +8,14 @@ import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { loadConfig, type Config } from '../src/config.ts';
+import { indexSchema } from '../src/generation/index-schema.ts';
 
 export function tmp(prefix = 'mcp-test-'): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-/** Same tables and indexes as devos-angular-intelligence `src/artifacts/sqlite.ts`. */
-const SCHEMA = `
-create table meta(key text primary key, value text not null);
-create table entities(id text primary key, kind text, name text, container text, signature text, project text, origin text, json text);
-create table declarations(id text primary key, entity text, context text, path text, line integer, col integer);
-create table evidence(id text primary key, path text, line integer, col integer, end_line integer, end_col integer, method text, context text, text text);
-create table relations(id text primary key, kind text, from_id text, to_id text, usage text, resolution text, context text, path text, line integer, declared_target text);
-create table observations(id text primary key, kind text, project text, path text, line integer, json text);
-create table links(id text primary key, kind text, via text, from_obs text, to_obs text, resolution text, reason text);
-create table diagnostics(id text primary key, severity text, code text, scope text, state text, message text);
-create table projects(id text primary key, record_type text, path text, json text);
-create virtual table search using fts5(ref unindexed, kind unindexed, text);
-`;
+/** The base section of the vendored contract index.sql, as every producer writes it. */
+const SCHEMA = indexSchema().statements.base.join('\n');
 
 export const CTX = 'ctx:0001';
 const P = 'ts:.:src/app';
@@ -127,10 +117,7 @@ export function writeGeneration(dir: string, o: GenOptions): string {
     obs('obs:con2', 'di.consumes', 'src/app/order-list.ts', 8, { service: IDS.repo, consumer: IDS.list, via: 'constructor' });
     ins('links', 'lnk:1', 'configured_route', 'http', 'obs:call1', 'obs:ep1', 'exact', null);
     if (o.dotnetExtras) {
-      db.exec(`create table relation_evidence(relation text, evidence text, primary key (relation, evidence));
-        create table observation_evidence(observation text, evidence text, primary key (observation, evidence));
-        create table link_evidence(link text, evidence text, primary key (link, evidence));
-        create table evidence_snippet(evidence text primary key, snippet text);`);
+      db.exec(indexSchema().statements.evidence.join('\n'));
       ins('meta', 'indexSchema', '1');
       // rel:6 is OrderList -> OrdersService (read); two usages of it.
       evidence('src/app/order-list.ts', 7, 'private readonly orders = inject(OrdersService);');
@@ -139,7 +126,10 @@ export function writeGeneration(dir: string, o: GenOptions): string {
       ins('relation_evidence', 'rel:6', `ev:${ev}`);
       relation('possible_runtime_target', IDS.listInit, IDS.sqlRepo, null, 'src/app/order-list.ts', 12);
       obs('obs:pub1', 'messaging.publish', 'src/app/orders.service.ts', 20, { contract: 'ts:.:src/app/events#OrderPlaced', publisher: IDS.load, transport: 'kafka', destination: { kind: 'topic', name: 'orders.placed', nameSource: 'configuration' } });
-      obs('obs:sub1', 'messaging.subscribe', 'src/app/archive.service.ts', 5, { contract: 'ts:.:src/app/events#OrderPlaced', handler: IDS.other, transport: 'kafka', destination: { kind: 'topic', name: 'orders.placed', nameSource: 'literal' } });
+      ent(`${P}/orders.service#OrdersService.#ctor`, 'constructor', 'OrdersService', IDS.service, 'OrdersService()');
+      // .NET contract object; `site` points at an evidence other than the row's location.
+      evidence('src/app/archive.service.ts', 9, 'public Task Consume(OrderPlaced message)');
+      obs('obs:sub1', 'messaging.subscribe', 'src/app/archive.service.ts', 5, { site: `ev:${ev}`, contract: { entity: 'ts:.:src/app/events#OrderPlaced', fullName: 'Shop.Events.OrderPlaced', name: 'OrderPlaced' }, handler: IDS.other, transport: 'kafka', destination: { kind: 'topic', name: 'orders.placed', nameSource: 'literal' } });
       ins('links', 'lnk:4', 'consumes_contract', 'messaging', 'obs:pub1', 'obs:sub1', 'exact', null);
       ins('search', 'obs:ep1', 'observation', 'http.endpoint GET /v1/orders OrdersController.List');
     }

@@ -8,7 +8,9 @@ import { loadConfig } from '../../src/config.ts';
 import { Resolver, type Resolution } from '../../src/resolve/resolver.ts';
 import { TOOLS, runTool } from '../../src/mcp/tools.ts';
 import { canonicalRoute } from '../../src/format.ts';
-import { ESHOP, ESHOP_COMMIT, GENERATIONS, LAB_WEB, LAB_WEB_COMMIT, LAB_WEB_REMOTE, cloneAt, git, skipUnless } from './env.ts';
+import { CONTRACT, ESHOP, ESHOP_COMMIT, GENERATIONS, LAB_LEASING, LAB_LEASING_REMOTE, LAB_WEB, LAB_WEB_COMMIT, LAB_WEB_REMOTE, cloneAt, git, skipUnless } from './env.ts';
+import { execFileSync } from 'node:child_process';
+import { INDEX_SQL } from '../../src/generation/index-schema.ts';
 import { tmp } from '../helpers.ts';
 
 const cfg = () => loadConfig({ HOME: tmp('mcp-it-home-'), DEVOS_MCP_GENERATIONS: GENERATIONS, DEVOS_MCP_OCI: 'off' });
@@ -73,7 +75,7 @@ test('lab-web two commits ahead: nearest ancestor with a warning in every answer
   assert.match(call(res, 'http', { route: '/v1/quotes' }), /quotes.service.ts:\d+\n/, 'unchanged files are not marked');
 });
 
-test('eShopOnAbp: two generations of one commit (Angular with index, .NET without)', { skip: skipUnless(GENERATIONS, ESHOP) }, async () => {
+test('eShopOnAbp: two generations of one commit, both engines', { skip: skipUnless(GENERATIONS, ESHOP) }, async () => {
   const dir = cloneAt(ESHOP, ESHOP_COMMIT, 'https://github.com/abpframework/eShopOnAbp.git');
   const res = await resolveAt(dir);
   assert.deepEqual(res.loaded.map((g) => g.label).sort(), ['eshoponabp-angular', 'eshoponabp-dotnet']);
@@ -93,4 +95,37 @@ test('every lab and reference generation verifies', { skip: skipUnless(GENERATIO
     const v = await verifyGeneration(join(GENERATIONS, n));
     assert.ok(v.ok, `${n}: ${v.errors.join('; ')}`);
   }
+});
+
+test('lab-leasing .NET generation with index.sqlite: ground-truth endpoints, messages, type over constructor', { skip: skipUnless(GENERATIONS, LAB_LEASING) }, async () => {
+  const commit = JSON.parse(readFileSync(join(GENERATIONS, 'lab-leasing-dotnet', 'manifest.json'), 'utf8')).commit as string;
+  const res = await resolveAt(cloneAt(LAB_LEASING, commit, LAB_LEASING_REMOTE));
+  assert.equal(res.loaded.length, 1);
+  const g = res.loaded[0];
+  assert.ok(g.reader, g.readerError ?? '');
+  assert.match(call(res, 'generation_info'), /index schema 1, entities \d+/);
+
+  // leasing-endpoints: the 16 /v1 endpoints of the ground truth, method and route template.
+  const truth = readFileSync(join(LAB_LEASING, 'ground-truth.yml'), 'utf8');
+  const block = truth.slice(truth.indexOf('id: leasing-endpoints'), truth.indexOf('endpointCount:'));
+  const endpoints = [...block.matchAll(/- "(GET|POST|PUT|PATCH|DELETE) (v1\/\S+) \(/g)];
+  assert.equal(endpoints.length, 16);
+  const routes = call(res, 'routes', { limit: 100 });
+  for (const [, verb, route] of endpoints) assert.match(routes, new RegExp(`\\nHTTP ${verb} /${route.replace(/[{}?:/]/g, (c) => '\\' + c)} {2}-> \\w+Controller\\.`), `${verb} ${route}`);
+  assert.match(routes, /of 16 routes$/);
+
+  assert.match(call(res, 'who_calls', { route: 'POST /v1/leases/{id}/sign' }), /served by POST \/v1\/leases\/\{flowId:guid\}\/sign -> LeasesController.Sign/);
+  assert.match(call(res, 'symbol', { symbol: 'QuotePricingService' }), /\nclass QuotePricingService\n/);
+  const messages = call(res, 'messages', { contract: 'LeaseApplicationEnriched', limit: 100 });
+  assert.match(messages, /subscribe Lab.Intake.Contracts.LeaseApplicationEnriched .*topic lease-application-enrichment-v1 \(configuration\)/);
+  assert.doesNotMatch(call(res, 'messages', { limit: 100 }), /\[object Object\]/);
+  const refs = call(res, 'refs', { symbol: 'Leasing.AppServices.Flows.Commands.SignContractCommand', limit: 100 });
+  assert.match(refs, /references to SignContractCommand\n/);
+});
+
+test('vendored index.sql equals devos-intelligence-contract at the vendored tag', { skip: skipUnless(CONTRACT) }, () => {
+  const vendor = JSON.parse(readFileSync(new URL('../../schema/VENDOR.json', import.meta.url), 'utf8'));
+  const upstream = execFileSync('git', ['-C', CONTRACT, 'show', `${vendor.tag}:${vendor.path}/index.sql`], { encoding: 'utf8' });
+  assert.equal(readFileSync(INDEX_SQL, 'utf8'), upstream);
+  assert.equal(execFileSync('git', ['-C', CONTRACT, 'rev-parse', `${vendor.tag}^{commit}`], { encoding: 'utf8' }).trim(), vendor.commit);
 });

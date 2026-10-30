@@ -134,9 +134,11 @@ const generationInfo: ToolDef = {
       const cov = m.coverage?.summary ? Object.entries(m.coverage.summary).map(([k, v]) => `${k} ${v}`).join(', ') : 'n/a';
       const counts = g.reader ? `schema ${g.reader.meta().indexSchema ?? '(unversioned)'}, ${Object.entries(g.reader.counts()).map(([k, v]) => `${k} ${v}`).join(', ')}` : g.readerError;
       const packs = listPacks(g.dir, m);
+      const meta = g.reader?.meta() ?? {};
+      const inputs = g.reader?.tables.has('inputs') ? g.reader.all('select id from inputs order by id').map((r) => r.id as string) : [];
       out.push(
         '',
-        `generation ${g.label}`,
+        `generation ${g.label}${meta.generationType === 'system' ? ` (system generation ${meta.system ?? ''}, ${inputs.length} inputs: ${inputs.join(', ')})` : ''}`,
         `  source ${g.source}: ${g.origin}`,
         `  engine ${m.engine?.name ?? '?'} ${m.engine?.version ?? ''}, contract ${m.schemaVersion}, status ${m.status ?? '?'}, commit ${m.commit}`,
         `  verified: manifest SHA-256 ${g.manifestSha256.slice(0, 16)}..., ${m.files?.length ?? 0} listed files checked${g.notes.length ? `; notes: ${g.notes.join('; ')}` : ''}`,
@@ -427,6 +429,15 @@ const whoCalls: ToolDef = {
   },
 };
 
+/** A message contract is an entity id (v1.1 engines) or `{entity, fullName, name, identity}` (.NET). */
+function contractName(c: unknown): string {
+  if (c && typeof c === 'object') {
+    const o = c as Row;
+    return o.fullName ?? o.name ?? shortName(o.entity ?? o.identity);
+  }
+  return shortName(typeof c === 'string' ? c : null);
+}
+
 const messages: ToolDef = {
   name: 'messages',
   description: 'Messaging: publishers and subscribers (contract, transport, destination), with file:line and the links between them; filter by contract or destination name. Empty for engines that do not observe messaging.',
@@ -437,13 +448,13 @@ const messages: ToolDef = {
       const r = g.reader!;
       const obs = r.observations(['messaging.publish', 'messaging.subscribe']).filter((o) => {
         if (!term) return true;
-        return [o.contract, o.messageType, o.destination?.name, o.topic, o.queue].some((v) => typeof v === 'string' && v.toLowerCase().includes(term));
+        return [contractName(o.contract), o.contract?.fullName, o.messageType, o.destination?.name, o.topic, o.queue].some((v) => typeof v === 'string' && v.toLowerCase().includes(term));
       });
       const links = r.linksFrom(obs.map((o) => o.id));
       return obs.map((o) => {
         const dest = o.destination ? `${o.destination.kind ?? 'destination'} ${o.destination.name ?? '?'}${o.destination.nameSource ? ` (${o.destination.nameSource})` : ''}` : 'destination unknown';
         const who = o.kind === 'messaging.publish' ? o.publisher ?? o.sender : o.handler ?? o.consumer ?? o.subscriber;
-        const block = [`${o.kind === 'messaging.publish' ? 'publish  ' : 'subscribe'} ${shortName(o.contract ?? o.messageType)}  ${o.transport ?? (o.transports ? o.transports.join('|') : '')}  ${dest}  by ${shortName(who)}  ${loc(o._path, o._line, ctx.fresh.changed)}`.replace(/\s{3,}/g, '  ')];
+        const block = [`${o.kind === 'messaging.publish' ? 'publish  ' : 'subscribe'} ${contractName(o.contract ?? o.messageType)}  ${o.transport ?? (o.transports ? o.transports.join('|') : '')}  ${dest}  by ${shortName(who)}  ${loc(o._path, o._line, ctx.fresh.changed)}`.replace(/\s{3,}/g, '  ')];
         for (const l of links.filter((x) => x.from_obs === o.id)) {
           const to = l.to_obs ? r.observation(l.to_obs) : null;
           block.push(`  link ${l.kind} ${l.resolution}${to ? ` -> ${to.kind} by ${shortName(to.handler ?? to.consumer ?? to.subscriber)} ${loc(to._path, to._line, ctx.fresh.changed)}` : `: ${l.reason ?? 'no target'}`}`);

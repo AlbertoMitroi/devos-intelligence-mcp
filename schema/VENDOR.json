@@ -1,0 +1,9 @@
+{
+  "source": "devos-intelligence-contract",
+  "tag": "v1.2.0",
+  "commit": "2828fd639bd3360fddb43d543a5a832e2f713478",
+  "path": "schema/index/v1",
+  "files": {
+    "index.sql": "989b59459af64c6396c418cf6a9943637fb206ab5b9c0796866880aed2d2868d"
+  }
+}
