@@ -1,0 +1,24 @@
+{
+  "name": "devos-intelligence-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that answers AI agents from intelligence generations (index.sqlite, context packs) of the repository they work in.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.22.0"
+  },
+  "bin": {
+    "devos-intelligence-mcp": "src/cli.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-reporter=spec 'tests/unit/*.test.ts'",
+    "test:integration": "node --test --test-reporter=spec --test-concurrency=1 'tests/integration/*.test.ts'"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3"
+  }
+}
